@@ -489,6 +489,196 @@ type Options struct {
 	// re-sent every turn instead of trusting the provider's advertised
 	// window. Every knob is optional; nil means the documented default.
 	ContextReduction ContextReductionOptions `json:"context_reduction,omitempty" jsonschema:"description=Context reduction settings (compaction, digesting, pointer stubs\\, learned context ceiling)"`
+
+	// Governance keeps a turn from grinding: it scores exploration, steers
+	// when the work stops paying for itself, and refuses claims the turn's
+	// own evidence does not support.
+	Governance GovernanceOptions `json:"governance,omitempty" jsonschema:"description=Turn governance settings (exploration pressure\\, nudges\\, completion gate\\, reasoning metrics)"`
+}
+
+// GovernanceOptions configures turn governance. Every field is optional; nil
+// or zero selects the documented default, which is tuned so an ordinary
+// productive turn never sees a steering note.
+type GovernanceOptions struct {
+	// Enabled turns governance on or off. Nil means enabled.
+	Enabled *bool `json:"enabled,omitempty" jsonschema:"description=Enable turn governance (exploration governor\\, nudges\\, completion gate),default=true"`
+	// SoftThreshold is the pressure where the first steering note fires.
+	SoftThreshold *float64 `json:"soft_threshold,omitempty" jsonschema:"description=Pressure where the first steering note fires,default=0.25,example=0.3"`
+	// ModerateThreshold adds the "you already answered this" steer.
+	ModerateThreshold *float64 `json:"moderate_threshold,omitempty" jsonschema:"description=Pressure where the stronger steer fires,default=0.45"`
+	// StrongThreshold is firm escalation while the behaviour persists.
+	StrongThreshold *float64 `json:"strong_threshold,omitempty" jsonschema:"description=Pressure for firm escalation,default=0.65"`
+	// HardThreshold is the only refusal, and only for an already-answered
+	// repeat.
+	HardThreshold *float64 `json:"hard_threshold,omitempty" jsonschema:"description=Pressure at which redundant repeats are refused,default=0.85"`
+	// RepeatedSearchThreshold is how many identical searches count as
+	// repetition.
+	RepeatedSearchThreshold *int `json:"repeated_search_threshold,omitempty" jsonschema:"description=Identical searches before one counts as repetition,default=3"`
+	// RepeatedReadThreshold is how many reads of one region count as
+	// repetition.
+	RepeatedReadThreshold *int `json:"repeated_read_threshold,omitempty" jsonschema:"description=Re-reads of one region before one counts,default=3"`
+	// NoProgressThreshold is how many failed or empty results in a row push
+	// the turn into stagnation.
+	NoProgressThreshold *int `json:"no_progress_threshold,omitempty" jsonschema:"description=Failed or empty results before stagnation pressure,default=5"`
+	// ExplorationTimeWarningSec is when elapsed time starts multiplying
+	// pressure. It is a multiplier, never a deadline.
+	ExplorationTimeWarningSec *int `json:"exploration_time_warning_sec,omitempty" jsonschema:"description=Seconds before elapsed time starts multiplying pressure,default=240,example=300"`
+	// ExplorationTimeCriticalSec is the elapsed time for the critical
+	// multiplier.
+	ExplorationTimeCriticalSec *int `json:"exploration_time_critical_sec,omitempty" jsonschema:"description=Seconds for the critical pressure multiplier,default=600"`
+	// HistorySize bounds the action records the score is computed from.
+	HistorySize *int `json:"history_size,omitempty" jsonschema:"description=Action records kept for the pressure calculation,default=40"`
+	// MaxRounds bounds a single turn's model rounds. Zero disables the cap,
+	// which is the default: the governor steers, it does not cut.
+	MaxRounds *int `json:"max_rounds,omitempty" jsonschema:"description=Model rounds allowed per turn; 0 disables the cap,default=0,example=60"`
+	// CompletionGate refuses a finish whose claims this turn's tool results
+	// do not support.
+	CompletionGate *bool `json:"completion_gate,omitempty" jsonschema:"description=Refuse a completion the turn evidence does not support,default=true"`
+	// ReasoningMetrics records behavioural signals (post-decision tail,
+	// restart density) per turn instead of asking the model to self-check.
+	ReasoningMetrics *bool `json:"reasoning_metrics,omitempty" jsonschema:"description=Record per-turn reasoning metrics,default=true"`
+}
+
+// Defaults for turn governance.
+const (
+	DefaultSoftThreshold       = 0.25
+	DefaultModerateThreshold   = 0.45
+	DefaultStrongThreshold     = 0.65
+	DefaultHardThreshold       = 0.85
+	DefaultHistorySize         = 40
+	DefaultExplorationWarnSec  = 240
+	DefaultExplorationCritSec  = 600
+	DefaultNoProgressThreshold = 5
+	DefaultRepeatThreshold     = 3
+)
+
+// GetGovernance returns the governance settings, never nil.
+func (o *Options) GetGovernance() *GovernanceOptions {
+	if o == nil {
+		return &GovernanceOptions{}
+	}
+	return &o.Governance
+}
+
+func floatOr(v *float64, fallback float64) float64 {
+	if v == nil || *v <= 0 || *v > 1 {
+		return fallback
+	}
+	return *v
+}
+
+// GovernanceEnabled reports whether governance runs at all.
+func (g *GovernanceOptions) GovernanceEnabled() bool {
+	if g == nil {
+		return true
+	}
+	return boolOr(g.Enabled, true)
+}
+
+// GetSoftThreshold and friends return the pressure thresholds.
+func (g *GovernanceOptions) GetSoftThreshold() float64 {
+	if g == nil {
+		return DefaultSoftThreshold
+	}
+	return floatOr(g.SoftThreshold, DefaultSoftThreshold)
+}
+
+// GetModerateThreshold returns the moderate pressure threshold.
+func (g *GovernanceOptions) GetModerateThreshold() float64 {
+	if g == nil {
+		return DefaultModerateThreshold
+	}
+	return floatOr(g.ModerateThreshold, DefaultModerateThreshold)
+}
+
+// GetStrongThreshold returns the strong pressure threshold.
+func (g *GovernanceOptions) GetStrongThreshold() float64 {
+	if g == nil {
+		return DefaultStrongThreshold
+	}
+	return floatOr(g.StrongThreshold, DefaultStrongThreshold)
+}
+
+// GetHardThreshold returns the pressure at which repeats are refused.
+func (g *GovernanceOptions) GetHardThreshold() float64 {
+	if g == nil {
+		return DefaultHardThreshold
+	}
+	return floatOr(g.HardThreshold, DefaultHardThreshold)
+}
+
+// GetRepeatedSearchThreshold returns the identical-search limit.
+func (g *GovernanceOptions) GetRepeatedSearchThreshold() int {
+	if g == nil {
+		return DefaultRepeatThreshold
+	}
+	return positiveIntOr(g.RepeatedSearchThreshold, DefaultRepeatThreshold)
+}
+
+// GetRepeatedReadThreshold returns the repeated-read limit.
+func (g *GovernanceOptions) GetRepeatedReadThreshold() int {
+	if g == nil {
+		return DefaultRepeatThreshold
+	}
+	return positiveIntOr(g.RepeatedReadThreshold, DefaultRepeatThreshold)
+}
+
+// GetNoProgressThreshold returns how many empty results mean stagnation.
+func (g *GovernanceOptions) GetNoProgressThreshold() int {
+	if g == nil {
+		return DefaultNoProgressThreshold
+	}
+	return positiveIntOr(g.NoProgressThreshold, DefaultNoProgressThreshold)
+}
+
+// GetExplorationTimeWarningSec returns the elapsed-time warning multiplier
+// threshold in seconds.
+func (g *GovernanceOptions) GetExplorationTimeWarningSec() int {
+	if g == nil {
+		return DefaultExplorationWarnSec
+	}
+	return positiveIntOr(g.ExplorationTimeWarningSec, DefaultExplorationWarnSec)
+}
+
+// GetExplorationTimeCriticalSec returns the elapsed-time critical multiplier
+// threshold in seconds.
+func (g *GovernanceOptions) GetExplorationTimeCriticalSec() int {
+	if g == nil {
+		return DefaultExplorationCritSec
+	}
+	return positiveIntOr(g.ExplorationTimeCriticalSec, DefaultExplorationCritSec)
+}
+
+// GetHistorySize returns how many actions the pressure score keeps.
+func (g *GovernanceOptions) GetHistorySize() int {
+	if g == nil {
+		return DefaultHistorySize
+	}
+	return positiveIntOr(g.HistorySize, DefaultHistorySize)
+}
+
+// GetMaxRounds returns the per-turn round cap, or 0 for none.
+func (g *GovernanceOptions) GetMaxRounds() int {
+	if g == nil || g.MaxRounds == nil || *g.MaxRounds < 0 {
+		return 0
+	}
+	return *g.MaxRounds
+}
+
+// GetCompletionGate reports whether unsupported completions are refused.
+func (g *GovernanceOptions) GetCompletionGate() bool {
+	if g == nil {
+		return true
+	}
+	return boolOr(g.CompletionGate, true)
+}
+
+// GetReasoningMetrics reports whether per-turn reasoning metrics are recorded.
+func (g *GovernanceOptions) GetReasoningMetrics() bool {
+	if g == nil {
+		return true
+	}
+	return boolOr(g.ReasoningMetrics, true)
 }
 
 // ContextReductionOptions configures the context-reduction stack: session

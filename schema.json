@@ -127,6 +127,92 @@
       "additionalProperties": false,
       "type": "object"
     },
+    "ContextReductionOptions": {
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Enable context reduction (compaction, digesting, pointer stubs, learned ceiling)",
+          "default": true
+        },
+        "compaction_trigger_tokens": {
+          "type": "integer",
+          "description": "Prompt size in tokens that triggers session compaction",
+          "default": 70000,
+          "examples": [
+            50000
+          ]
+        },
+        "compaction_budget_tokens": {
+          "type": "integer",
+          "description": "Target prompt size in tokens after compaction",
+          "default": 70000,
+          "examples": [
+            60000
+          ]
+        },
+        "compaction_summary_tokens": {
+          "type": "integer",
+          "description": "Token budget for the compaction summary",
+          "default": 2000,
+          "examples": [
+            4000
+          ]
+        },
+        "response_reserve_tokens": {
+          "type": "integer",
+          "description": "Tokens reserved for the model answer when sizing a compacted prompt",
+          "default": 8192,
+          "examples": [
+            16000
+          ]
+        },
+        "tool_result_digest_tokens": {
+          "type": "integer",
+          "description": "Tool result size in tokens above which old results are digested",
+          "default": 1024,
+          "examples": [
+            512
+          ]
+        },
+        "protect_errors": {
+          "type": "boolean",
+          "description": "Never digest failed tool results",
+          "default": true
+        },
+        "read_pointer_stubs": {
+          "type": "boolean",
+          "description": "Answer a re-read of an unchanged file with a pointer instead of the body",
+          "default": true
+        },
+        "read_pointer_stub_tokens": {
+          "type": "integer",
+          "description": "Minimum file body size in tokens before a re-read is answered with a pointer",
+          "default": 256,
+          "examples": [
+            512
+          ]
+        },
+        "learned_ceiling": {
+          "type": "boolean",
+          "description": "Learn a per-model context ceiling from provider overflow errors",
+          "default": true
+        },
+        "ceiling_safety_percent": {
+          "type": "integer",
+          "description": "Percent of the advertised context window the prompt may use",
+          "default": 90,
+          "examples": [
+            85
+          ]
+        },
+        "digest_cache_dir": {
+          "type": "string",
+          "description": "Directory for memoized conversation digests (default inside the data directory)"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
     "EffortLevel": {
       "properties": {
         "value": {
@@ -142,6 +228,91 @@
         "value",
         "display"
       ]
+    },
+    "GovernanceOptions": {
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Enable turn governance (exploration governor, nudges, completion gate)",
+          "default": true
+        },
+        "soft_threshold": {
+          "type": "number",
+          "description": "Pressure where the first steering note fires",
+          "default": 0.25,
+          "examples": [
+            0.3
+          ]
+        },
+        "moderate_threshold": {
+          "type": "number",
+          "description": "Pressure where the stronger steer fires",
+          "default": 0.45
+        },
+        "strong_threshold": {
+          "type": "number",
+          "description": "Pressure for firm escalation",
+          "default": 0.65
+        },
+        "hard_threshold": {
+          "type": "number",
+          "description": "Pressure at which redundant repeats are refused",
+          "default": 0.85
+        },
+        "repeated_search_threshold": {
+          "type": "integer",
+          "description": "Identical searches before one counts as repetition",
+          "default": 3
+        },
+        "repeated_read_threshold": {
+          "type": "integer",
+          "description": "Re-reads of one region before one counts",
+          "default": 3
+        },
+        "no_progress_threshold": {
+          "type": "integer",
+          "description": "Failed or empty results before stagnation pressure",
+          "default": 5
+        },
+        "exploration_time_warning_sec": {
+          "type": "integer",
+          "description": "Seconds before elapsed time starts multiplying pressure",
+          "default": 240,
+          "examples": [
+            300
+          ]
+        },
+        "exploration_time_critical_sec": {
+          "type": "integer",
+          "description": "Seconds for the critical pressure multiplier",
+          "default": 600
+        },
+        "history_size": {
+          "type": "integer",
+          "description": "Action records kept for the pressure calculation",
+          "default": 40
+        },
+        "max_rounds": {
+          "type": "integer",
+          "description": "Model rounds allowed per turn; 0 disables the cap",
+          "default": 0,
+          "examples": [
+            60
+          ]
+        },
+        "completion_gate": {
+          "type": "boolean",
+          "description": "Refuse a completion the turn evidence does not support",
+          "default": true
+        },
+        "reasoning_metrics": {
+          "type": "boolean",
+          "description": "Record per-turn reasoning metrics",
+          "default": true
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
     },
     "HookConfig": {
       "properties": {
@@ -691,6 +862,14 @@
           "examples": [
             300
           ]
+        },
+        "context_reduction": {
+          "$ref": "#/$defs/ContextReductionOptions",
+          "description": "Context reduction settings (compaction"
+        },
+        "governance": {
+          "$ref": "#/$defs/GovernanceOptions",
+          "description": "Turn governance settings (exploration pressure, nudges, completion gate, reasoning metrics)"
         }
       },
       "additionalProperties": false,

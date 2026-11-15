@@ -45,6 +45,7 @@ import (
 	"github.com/charmbracelet/crush/internal/csync"
 	"github.com/charmbracelet/crush/internal/hooks"
 	"github.com/charmbracelet/crush/internal/message"
+	"github.com/charmbracelet/crush/internal/nudge"
 	"github.com/charmbracelet/crush/internal/permission"
 	"github.com/charmbracelet/crush/internal/proto"
 	"github.com/charmbracelet/crush/internal/pubsub"
@@ -299,6 +300,9 @@ type sessionAgent struct {
 	// context ceiling. Nil disables the stack entirely, which is what the
 	// tests that predate it rely on.
 	reduction *reductionState
+	// governance is the turn-governance layer: exploration pressure, nudge
+	// policy and the completion gate. Nil disables it.
+	governance *governanceState
 }
 
 type SessionAgentOptions struct {
@@ -323,6 +327,8 @@ type SessionAgentOptions struct {
 	// Reduction carries the context-reduction settings and digest store.
 	// Nil disables the stack.
 	Reduction *ReductionOptions
+	// Governance carries the turn-governance settings. Nil disables it.
+	Governance *GovernanceOptions
 }
 
 func NewSessionAgent(
@@ -347,6 +353,7 @@ func NewSessionAgent(
 		activeRequests:       csync.NewMap[string, *activeCancel](),
 		titles:               cmp.Or(opts.titles, new(titleTracker)),
 		reduction:            newReductionState(opts.Reduction),
+		governance:           newGovernanceState(opts.Governance),
 		dispatchMu:           csync.NewMap[string, *sync.Mutex](),
 		acceptedRuns:         csync.NewMap[string, int](),
 		cancelMark:           csync.NewMap[string, uint64](),
@@ -998,6 +1005,12 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 	if call.MaxOutputTokens > 0 {
 		maxOutputTokens = &call.MaxOutputTokens
 	}
+	// Turn governance. The governor scores exploration and the nudge engine
+	// names the failure; both report into the same per-turn tracker so a note
+	// can be injected into the next round's prompt.
+	turnGov := a.governorFor()
+	rounds := &roundTracker{}
+	truth := newReasoningTruth()
 	result, err = agent.Stream(genCtx, fantasy.AgentStreamCall{
 		Prompt:           modelContext + message.PromptWithTextAttachments(strings.TrimSpace(call.Prompt), call.Attachments),
 		Files:            files,
@@ -1015,6 +1028,7 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 			for i := range prepared.Messages {
 				prepared.Messages[i].ProviderOptions = nil
 			}
+			turnGov.beginRound()
 
 			// Use latest tools (updated by SetTools when MCP tools
 			// change), filtered for the session's channel and minus MCP
@@ -1068,6 +1082,13 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 				prepared.Messages = append([]fantasy.Message{fantasy.NewSystemMessage(promptPrefix)}, prepared.Messages...)
 			}
 
+			// Steering notes are the whole point of the governor: they only
+			// work if the model reads them, and the one place it always reads
+			// is the prompt it is about to receive.
+			if notes := turnGov.takeNotes(); len(notes) > 0 {
+				prepared.Messages = append([]fantasy.Message{fantasy.NewSystemMessage(governanceNotesText(notes))}, prepared.Messages...)
+			}
+
 			sessionLock.Lock()
 			stepMessages = cloneFantasyMessages(prepared.Messages)
 			sessionLock.Unlock()
@@ -1095,6 +1116,7 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 			return a.messages.Update(genCtx, *currentAssistant)
 		},
 		OnReasoningDelta: func(id string, text string) error {
+			turnGov.observeReasoning(text)
 			currentAssistant.AppendReasoningContent(text)
 			return a.messages.Update(genCtx, *currentAssistant)
 		},
@@ -1127,6 +1149,7 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 			}
 
 			currentAssistant.AppendContent(text)
+			turnGov.observeProse(text)
 			return a.messages.Update(genCtx, *currentAssistant)
 		},
 		OnToolInputStart: func(id string, toolName string) error {
@@ -1164,6 +1187,12 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 			if wasSanitized {
 				sanitizedToolCalls.Set(tc.ToolCallID, true)
 			}
+			// A repeat the governor has already answered is refused rather
+			// than run again: the result cannot differ, and the round that
+			// would have carried it is spent for nothing.
+			if turnGov.observeToolCall(tc.ToolName, input) {
+				sanitizedToolCalls.Set(tc.ToolCallID, true)
+			}
 			toolCall := message.ToolCall{
 				ID:               tc.ToolCallID,
 				Name:             tc.ToolName,
@@ -1188,6 +1217,7 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 			if !toolResult.IsError && toolResult.Name != "" {
 				completedToolCalls.Set(toolResult.Name, struct{}{})
 			}
+			turnGov.observeToolResult(toolResult.Name, toolResult.IsError, toolResult.Content)
 			// Use parent ctx instead of genCtx to ensure the message is created
 			// even if the request is canceled mid-stream
 			_, createMsgErr := a.messages.Create(ctx, currentAssistant.SessionID, message.CreateMessageParams{
@@ -1221,6 +1251,20 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 			currentAssistant.AddFinish(finishReason, finishMessage, finishDetails)
 			currentAssistant.PrismModelID, currentAssistant.PrismModelName = extractPrismModel(stepResult.ProviderMetadata)
 			currentAssistant.PrismHypercreditSavings, currentAssistant.PrismDollarSavings = extractPrismSavings(stepResult.ProviderMetadata)
+			// Did the provider actually honour the reasoning parameters this
+			// turn sent? A provider that accepts and ignores them makes every
+			// effort knob meaningless, so the fact is recorded rather than
+			// assumed.
+			sentReasoning := call.ProviderOptions != nil
+			gotReasoning := false
+			for _, part := range stepResult.Content {
+				if _, ok := part.(fantasy.ReasoningContent); ok {
+					gotReasoning = true
+					break
+				}
+			}
+			truth.observeResponse(sentReasoning, gotReasoning)
+
 			sessionLock.Lock()
 			defer sessionLock.Unlock()
 
@@ -1236,6 +1280,31 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 				return sessionErr
 			}
 			currentSession = updatedSession
+
+			// Evaluate governance for the round that just finished. The
+			// facts come from what the round actually did, not from what the
+			// model said about it.
+			if turnGov != nil {
+				calls := len(stepResult.Content.ToolCalls())
+				mutated := newFilesTouched(stepResult.Content)
+				rounds.observe(calls, mutated, calls > 0 && onlyJobChecks(stepResult.Content))
+				if mutated {
+					rounds.edits++
+				}
+				planning := len(currentSession.Todos) > 0
+				turnGov.recordReasoning(
+					postDecisionTail(stepResult.Content),
+					mutated,
+					reasoningRestarts(stepResult.Content),
+				)
+				turnGov.endRound(rounds.outcome(
+					sessionTodos(currentSession.Todos),
+					planning,
+					nudge.LooksLikeRecap(currentAssistant.Content().Text) && calls == 0,
+					repeatedProseCount(currentAssistant.Content().Text),
+				))
+			}
+
 			return a.messages.Update(genCtx, *currentAssistant)
 		},
 		StopWhen: []fantasy.StopCondition{
@@ -1262,6 +1331,16 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 			},
 			func(steps []fantasy.StepResult) bool {
 				return hasRepeatedToolCalls(steps, loopDetectionWindowSize, loopDetectionMaxRepeats)
+			},
+			func(steps []fantasy.StepResult) bool {
+				// The round cap is off by default: the governor steers, it
+				// does not cut. When a user turns it on, it ends the turn
+				// rather than looping forever.
+				limit := 0
+				if a.governance != nil {
+					limit = a.governance.maxRounds()
+				}
+				return limit > 0 && len(steps) >= limit
 			},
 		},
 	})
@@ -1293,6 +1372,18 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 		if !isCancelErr && contextreduction.IsContextOverflow(err) {
 			if a.reduction != nil {
 				a.reduction.learnOverflow(promptTokens(history), err)
+			}
+		}
+		// A provider that refuses a reasoning parameter must not leave the
+		// turn behaving as if the parameter took effect. Recording the drop
+		// and telling the model keeps the change from being read as a change
+		// in the task.
+		if !isCancelErr {
+			if parameter, dropped := dropsReasoningParameter(err); dropped {
+				truth.noteDropped(parameter)
+				a.AddNote(call.SessionID, reasoningDroppedNote(parameter))
+				slog.Info("Provider refused a reasoning parameter",
+					"session_id", call.SessionID, "parameter", parameter)
 			}
 		}
 		slog.Info("Agent stream returned error",
@@ -1397,6 +1488,61 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 		}
 	}
 	finished := currentAssistant != nil && !continued
+
+	// The completion gate: a finished reply that claims work this turn's tool
+	// results do not support is refused once, with a follow-up asking for the
+	// work. Without the follow-up the claim is the last thing the user sees;
+	// with it, the next round can actually do the job.
+	if finished && a.governance.completionGateEnabled() {
+		verdict := evaluateCompletion(completionEvidence{
+			ToolCalls:          len(currentAssistant.ToolCalls()),
+			Edits:              rounds.edits,
+			Runs:               turnGov.runCount(),
+			Prose:              currentAssistant.Content().Text,
+			ClaimsEdit:         ClaimsEdit(currentAssistant.Content().Text),
+			ClaimsVerification: ClaimsVerification(currentAssistant.Content().Text),
+		})
+		if verdict.Blocked {
+			if a.governance.gateBlocksUsed(call.SessionID, completionGateMaxBlocks) < completionGateMaxBlocks {
+				slog.Info("Completion gate refused an unsupported finish",
+					"session_id", call.SessionID, "reason", verdict.Reason)
+				followUp := call
+				followUp.Prompt = completionGateFollowUp(verdict.Reason)
+				followUp.Report = nil
+				existing, _ := a.messageQueue.Get(call.SessionID)
+				a.messageQueue.Set(call.SessionID, append(existing, followUp))
+				continued = true
+				finished = false
+			} else {
+				slog.Warn("Completion gate reached its retry limit; ending the turn",
+					"session_id", call.SessionID, "reason", verdict.Reason)
+			}
+		}
+	}
+
+	// Record the turn's reasoning behaviour. This is the measured half of the
+	// anti-overthinking story: tail length and restart density are what tell
+	// an operator the model is spinning, so tuning is driven by numbers.
+	if finished && turnGov != nil {
+		if score := turnGov.scoreSnapshot(); score.Rounds > 0 && a.governance.reasoningMetricsEnabled() {
+			slog.Info("Turn reasoning metrics",
+				"session_id", call.SessionID,
+				"rounds", score.Rounds,
+				"thinking_rounds", score.ThinkingRounds,
+				"progress_rounds", score.ProgressRounds,
+				"reason_chars", score.ReasonChars,
+				"restarts", score.Restarts,
+				"restart_density", score.RestartDensity(),
+				"worst_tail_chars", score.WorstTailChars,
+				"tail_ratio", score.TailRatio,
+				"needs_recovery", score.NeedsRecovery())
+		}
+		if honored, observed := truth.honorsReasoning(); observed {
+			slog.Info("Reasoning parameters",
+				"session_id", call.SessionID,
+				"honored", honored)
+		}
+	}
 
 	// Route the finished turn's response back to the channel it came
 	// from. Runs before the busy state is released so a follow-up push
