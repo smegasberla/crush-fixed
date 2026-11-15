@@ -130,8 +130,11 @@ func TestWaitForDiagnostics_NoChange(t *testing.T) {
 		c.WaitForDiagnostics(t.Context(), 5*time.Second)
 		elapsed := time.Since(start)
 
-		// Should return early via firstChangeDeadline (1s), not the full timeout.
-		require.Equal(t, time.Second, elapsed, "should return early when no diagnostics change")
+		// Should return early via the first-change window, not the full
+		// timeout. The window is 250ms: long enough for a server that has
+		// something to say, short enough that a quiet one does not make the
+		// model wait.
+		require.Equal(t, 250*time.Millisecond, elapsed, "should return early when no diagnostics change")
 	})
 }
 
@@ -150,8 +153,8 @@ func TestWaitForDiagnostics_ImmediateChange(t *testing.T) {
 		c.WaitForDiagnostics(t.Context(), 5*time.Second)
 		elapsed := time.Since(start)
 
-		// Should detect the change and then settle for 300ms.
-		require.GreaterOrEqual(t, elapsed, 400*time.Millisecond, "should wait for settle duration")
+		// Should detect the change and then settle.
+		require.GreaterOrEqual(t, elapsed, 250*time.Millisecond, "should wait for settle duration")
 		require.Less(t, elapsed, time.Second, "should return after settling, not full timeout")
 	})
 }
@@ -176,8 +179,9 @@ func TestWaitForDiagnostics_RepeatedChanges(t *testing.T) {
 		c.WaitForDiagnostics(t.Context(), 5*time.Second)
 		elapsed := time.Since(start)
 
-		// Burst lasts 250ms, then a 300ms settle window.
-		require.GreaterOrEqual(t, elapsed, 550*time.Millisecond, "should wait for all changes to settle")
+		// The burst runs 250ms, then a 150ms settle window elapses after the
+		// last change.
+		require.GreaterOrEqual(t, elapsed, 400*time.Millisecond, "should wait for all changes to settle")
 		require.Less(t, elapsed, time.Second, "should return after settling, not full timeout")
 	})
 }

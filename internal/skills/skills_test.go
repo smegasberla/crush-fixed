@@ -329,8 +329,8 @@ func TestToPromptXMLIsBoundedAndPointsAtTheRest(t *testing.T) {
 	require.Equal(t, MaxIndexedSkills, described)
 
 	// The rest are named, so nothing becomes unreachable.
-	require.Contains(t, xml, "5 more skills are installed")
-	require.Contains(t, xml, "skill-052", "unnamed skills are still listed by name")
+	require.Contains(t, xml, fmt.Sprintf("%d more skills are installed", len(many)-MaxIndexedSkills))
+	require.Contains(t, xml, fmt.Sprintf("skill-%03d", MaxIndexedSkills), "unnamed skills are still listed by name")
 	require.Contains(t, xml, "by name")
 }
 

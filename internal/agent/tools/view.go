@@ -111,6 +111,8 @@ const (
 	// DefaultAroundContext is how many lines each side of "around" a read
 	// includes. It is wide enough to show a function and its signature.
 	DefaultAroundContext = 40
+	// readDiagnosticsWait is how long a read waits for the language server.
+	readDiagnosticsWait = 120 * time.Millisecond
 )
 
 type contentTooLargeError struct {
@@ -335,7 +337,10 @@ func NewViewToolWithMemo(
 			}
 
 			openInLSPs(ctx, lspManager, filePath)
-			waitForLSPDiagnostics(ctx, lspManager, filePath, 300*time.Millisecond)
+			// A read waits only briefly for diagnostics: the file's content is
+			// the answer, and diagnostics are an extra. A slow language server
+			// must not make reading a file slower than not having one.
+			waitForLSPDiagnostics(ctx, lspManager, filePath, readDiagnosticsWait)
 			output := "<file>\n"
 			output += addLineNumbers(content, params.Offset+1)
 

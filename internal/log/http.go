@@ -12,13 +12,9 @@ import (
 )
 
 // NewHTTPClient creates an HTTP client with debug logging enabled when debug mode is on.
-func NewHTTPClient() *http.Client {
-	return &http.Client{
-		Transport: &HTTPRoundTripLogger{
-			Transport: http.DefaultTransport,
-		},
-	}
-}
+// NewHTTPClient is defined in pool.go, alongside the transport it wraps: the
+// logging client must use the same warm connection pool as the plain one, or
+// enabling debug logging would make every request slower.
 
 // HTTPRoundTripLogger is an http.RoundTripper that logs requests and responses.
 type HTTPRoundTripLogger struct {

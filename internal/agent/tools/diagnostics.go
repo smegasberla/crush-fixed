@@ -113,6 +113,12 @@ func notifyLSPs(
 
 	manager.Start(ctx, filepath)
 
+	// The notification is sent synchronously so the server starts analysing
+	// immediately, but waiting for the result is bounded and detached from the
+	// caller: a tool result must not sit for five seconds on a server that is
+	// slow to publish. Whatever has arrived by then is what the result shows;
+	// the next read picks up the rest, and the agent can always ask for
+	// diagnostics explicitly.
 	var wg sync.WaitGroup
 	for client := range manager.Clients().Seq() {
 		if !client.HandlesFile(filepath) {
@@ -121,11 +127,16 @@ func notifyLSPs(
 		_ = client.OpenFileOnDemand(ctx, filepath)
 		_ = client.NotifyChange(ctx, filepath)
 		wg.Go(func() {
-			client.WaitForDiagnostics(ctx, 5*time.Second)
+			client.WaitForDiagnostics(ctx, editDiagnosticsWait)
 		})
 	}
 	wg.Wait()
 }
+
+// editDiagnosticsWait is how long an edit's tool result waits for the language
+// server before answering. It is short on purpose: the result is a hint, and a
+// model that needs certainty can call the diagnostics tool, which waits longer.
+const editDiagnosticsWait = 600 * time.Millisecond
 
 func getDiagnostics(filePath string, manager *lsp.Manager) string {
 	if manager == nil {

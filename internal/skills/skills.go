@@ -303,7 +303,7 @@ func DiscoverWithStates(paths []string) ([]*Skill, []*SkillState) {
 // of thousands of tokens per request describing tools the turn will never open. A
 // bounded index with a way to enumerate the rest keeps every skill reachable
 // without paying for all of them up front.
-const MaxIndexedSkills = 48
+const MaxIndexedSkills = 16
 
 // ToPromptXML generates the skills index injected into the system prompt.
 // Skills with DisableModelInvocation set to true are excluded.

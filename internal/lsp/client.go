@@ -626,32 +626,42 @@ func (c *Client) WaitForDiagnostics(ctx context.Context, timeout time.Duration) 
 		return
 	}
 
+	// Every one of these waits sits in front of a tool result, so it is time
+	// the model spends waiting rather than working. The first window is short
+	// because a server that has something to say says it almost at once;
+	// polling starts slow and backs off, so a quiet server costs two cheap
+	// wake-ups instead of ten.
 	const (
-		firstChangeDuration = 1 * time.Second
-		settleDuration      = 300 * time.Millisecond
+		firstChangeDuration = 250 * time.Millisecond
+		settleDuration      = 150 * time.Millisecond
+		firstPollInterval   = 25 * time.Millisecond
+		maxPollInterval     = 80 * time.Millisecond
 	)
 
+	start := time.Now()
 	deadline := time.NewTimer(timeout)
 	defer deadline.Stop()
 	firstChangeTimer := time.NewTimer(min(timeout, firstChangeDuration))
 	defer firstChangeTimer.Stop()
 	previousVersion := c.diagnostics.Version()
-	ticker := time.NewTicker(100 * time.Millisecond)
-	defer ticker.Stop()
 
 	for {
+		remaining := timeout - time.Since(start)
+		if remaining <= 0 {
+			return
+		}
+		poll := min(firstPollInterval+time.Since(start)/8, maxPollInterval, remaining)
 		select {
 		case <-ctx.Done():
 			return
 		case <-deadline.C:
 			return
 		case <-firstChangeTimer.C:
-			// No change arrived quickly — server isn't republishing.
+			// No change arrived quickly - the server is not republishing.
 			return
-		case <-ticker.C:
-			currentVersion := c.diagnostics.Version()
-			if currentVersion != previousVersion {
-				// Diagnostics changed — now wait for them to settle.
+		case <-time.After(poll):
+			if c.diagnostics.Version() != previousVersion {
+				// Diagnostics changed - now wait for them to settle.
 				c.waitForDiagnosticsToSettle(ctx, deadline.C, settleDuration)
 				return
 			}
