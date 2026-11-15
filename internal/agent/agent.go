@@ -312,6 +312,8 @@ type sessionAgent struct {
 	// lastJournal is the most recent turn's edit journal, so the turn can be
 	// reverted.
 	lastJournal *editsafe.Journal
+	// speed is the request-latency layer. Nil disables it.
+	speed *speedState
 	// workingDir is the root an expected edit path is resolved against.
 	workingDir string
 }
@@ -345,6 +347,8 @@ type SessionAgentOptions struct {
 	// WorkingDir is the project root, used to resolve the paths a request
 	// names into absolute ones.
 	WorkingDir string
+	// Speed carries the request-latency settings. Nil disables the layer.
+	Speed *SpeedOptions
 }
 
 func NewSessionAgent(
@@ -371,6 +375,7 @@ func NewSessionAgent(
 		reduction:            newReductionState(opts.Reduction),
 		governance:           newGovernanceState(opts.Governance),
 		editSafety:           opts.EditSafety,
+		speed:                newSpeedState(opts.Speed),
 		workingDir:           opts.WorkingDir,
 		dispatchMu:           csync.NewMap[string, *sync.Mutex](),
 		acceptedRuns:         csync.NewMap[string, int](),
@@ -1046,6 +1051,7 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 	turnGov := a.governorFor()
 	rounds := &roundTracker{}
 	truth := newReasoningTruth()
+	turnSpeed := a.speedFor()
 	result, err = agent.Stream(genCtx, fantasy.AgentStreamCall{
 		Prompt:           modelContext + message.PromptWithTextAttachments(strings.TrimSpace(call.Prompt), call.Attachments),
 		Files:            files,
@@ -1068,9 +1074,12 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 			// Use latest tools (updated by SetTools when MCP tools
 			// change), filtered for the session's channel and minus MCP
 			// servers disabled for this repository.
-			prepared.Tools = a.filterDisabledMCPTools(
-				callContext,
-				filterToolsForChannel(a.tools.Copy(), call.Channel, mcp.GetStates()),
+			prepared.Tools = wrapToolsWithResultCache(
+				a.filterDisabledMCPTools(
+					callContext,
+					filterToolsForChannel(a.tools.Copy(), call.Channel, mcp.GetStates()),
+				),
+				turnSpeed,
 			)
 
 			// Drain queued follow-up prompts for this step. Calls covered
@@ -1253,6 +1262,11 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 				completedToolCalls.Set(toolResult.Name, struct{}{})
 			}
 			turnGov.observeToolResult(toolResult.Name, toolResult.IsError, toolResult.Content)
+			// A mutation invalidates every cached read: the workspace the
+			// cached results describe no longer exists.
+			if !toolResult.IsError && newFilesTouchedByName(toolResult.Name) {
+				turnSpeed.invalidate()
+			}
 			// Use parent ctx instead of genCtx to ensure the message is created
 			// even if the request is canceled mid-stream
 			_, createMsgErr := a.messages.Create(ctx, currentAssistant.SessionID, message.CreateMessageParams{
@@ -1553,6 +1567,10 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 					"session_id", call.SessionID, "reason", verdict.Reason)
 			}
 		}
+	}
+
+	if finished {
+		turnSpeed.logStats(call.SessionID)
 	}
 
 	// Record the turn's reasoning behaviour. This is the measured half of the

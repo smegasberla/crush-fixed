@@ -911,6 +911,10 @@
         "edit_safety": {
           "$ref": "#/$defs/EditSafetyOptions",
           "description": "Edit safety settings (diff bound, unexpected-file bound, shell interception)"
+        },
+        "speed": {
+          "$ref": "#/$defs/SpeedOptions",
+          "description": "Request latency settings (connect policy, result cache, prefetch, batch cap)"
         }
       },
       "additionalProperties": false,
@@ -1186,6 +1190,45 @@
         "model",
         "provider"
       ]
+    },
+    "SpeedOptions": {
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Enable the request-latency layer",
+          "default": true
+        },
+        "adaptive_timeout": {
+          "type": "boolean",
+          "description": "Size request timeouts from observed connect latency",
+          "default": true
+        },
+        "result_cache": {
+          "type": "boolean",
+          "description": "Answer a repeated tool call from a per-turn cache",
+          "default": true
+        },
+        "prefetch": {
+          "type": "boolean",
+          "description": "Prefetch likely follow-up lookups during a round",
+          "default": true
+        },
+        "max_batch_calls": {
+          "type": "integer",
+          "description": "Tool calls executed per round",
+          "default": 48,
+          "examples": [
+            10
+          ]
+        },
+        "dedupe_calls": {
+          "type": "boolean",
+          "description": "Drop tool calls identical to an earlier call in the same round",
+          "default": true
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
     },
     "TUIOptions": {
       "properties": {

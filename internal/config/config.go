@@ -498,6 +498,101 @@ type Options struct {
 	// EditSafety bounds what one edit may do and how far a turn may wander
 	// with writes.
 	EditSafety EditSafetyOptions `json:"edit_safety,omitempty" jsonschema:"description=Edit safety settings (diff bound\\, unexpected-file bound\\, shell interception)"`
+
+	// Speed makes each provider round faster without changing what the model
+	// sees: a learned connect timeout, a per-turn result cache, speculative
+	// prefetch and a batch cap.
+	Speed SpeedOptions `json:"speed,omitempty" jsonschema:"description=Request latency settings (connect policy\\, result cache\\, prefetch\\, batch cap)"`
+}
+
+// SpeedOptions configures the request-latency layer. Every field is optional;
+// nil or zero selects the documented default.
+type SpeedOptions struct {
+	// Enabled turns the layer on or off. Nil means enabled.
+	Enabled *bool `json:"enabled,omitempty" jsonschema:"description=Enable the request-latency layer,default=true"`
+	// AdaptiveTimeout sizes each request's timeout from observed connect
+	// latency for the endpoint.
+	AdaptiveTimeout *bool `json:"adaptive_timeout,omitempty" jsonschema:"description=Size request timeouts from observed connect latency,default=true"`
+	// ResultCache answers a repeated tool call from the value the first one
+	// produced. It is invalidated by any mutation.
+	ResultCache *bool `json:"result_cache,omitempty" jsonschema:"description=Answer a repeated tool call from a per-turn cache,default=true"`
+	// Prefetch starts the lookups a round is likely to need next.
+	Prefetch *bool `json:"prefetch,omitempty" jsonschema:"description=Prefetch likely follow-up lookups during a round,default=true"`
+	// MaxBatchCalls caps how many tool calls one round executes. Calls past
+	// the cap are re-emitted next round rather than lost.
+	MaxBatchCalls *int `json:"max_batch_calls,omitempty" jsonschema:"description=Tool calls executed per round,default=48,example=10"`
+	// DedupeCalls drops a tool call identical to an earlier one in the same
+	// round.
+	DedupeCalls *bool `json:"dedupe_calls,omitempty" jsonschema:"description=Drop tool calls identical to an earlier call in the same round,default=true"`
+}
+
+// Defaults for the request-latency layer.
+const (
+	DefaultMaxBatchCalls = 48
+	// DefaultMaxBatchCallsCeiling is the hard ceiling a configured value is
+	// clamped to: past it, a round carries more calls than the model can
+	// usefully reason about at once.
+	DefaultMaxBatchCallsCeiling = 200
+)
+
+// GetSpeed returns the speed settings, never nil.
+func (o *Options) GetSpeed() *SpeedOptions {
+	if o == nil {
+		return &SpeedOptions{}
+	}
+	return &o.Speed
+}
+
+// SpeedEnabled reports whether the layer runs at all.
+func (s *SpeedOptions) SpeedEnabled() bool {
+	if s == nil {
+		return true
+	}
+	return boolOr(s.Enabled, true)
+}
+
+// GetAdaptiveTimeout reports whether request timeouts are learned.
+func (s *SpeedOptions) GetAdaptiveTimeout() bool {
+	if s == nil {
+		return true
+	}
+	return boolOr(s.AdaptiveTimeout, true)
+}
+
+// GetResultCache reports whether a repeated tool call is answered from cache.
+func (s *SpeedOptions) GetResultCache() bool {
+	if s == nil {
+		return true
+	}
+	return boolOr(s.ResultCache, true)
+}
+
+// GetPrefetch reports whether lookups are prefetched.
+func (s *SpeedOptions) GetPrefetch() bool {
+	if s == nil {
+		return true
+	}
+	return boolOr(s.Prefetch, true)
+}
+
+// GetMaxBatchCalls returns the per-round call cap, clamped to the ceiling.
+func (s *SpeedOptions) GetMaxBatchCalls() int {
+	if s == nil {
+		return DefaultMaxBatchCalls
+	}
+	calls := positiveIntOr(s.MaxBatchCalls, DefaultMaxBatchCalls)
+	if calls > DefaultMaxBatchCallsCeiling {
+		return DefaultMaxBatchCallsCeiling
+	}
+	return calls
+}
+
+// GetDedupeCalls reports whether identical calls in one round are dropped.
+func (s *SpeedOptions) GetDedupeCalls() bool {
+	if s == nil {
+		return true
+	}
+	return boolOr(s.DedupeCalls, true)
 }
 
 // EditSafetyOptions configures the edit engine's bounds. Every field is
