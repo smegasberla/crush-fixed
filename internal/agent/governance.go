@@ -12,6 +12,7 @@ import (
 	"github.com/charmbracelet/crush/internal/config"
 	"github.com/charmbracelet/crush/internal/contextreduction"
 	"github.com/charmbracelet/crush/internal/governor"
+	"github.com/charmbracelet/crush/internal/message"
 	"github.com/charmbracelet/crush/internal/nudge"
 	"github.com/charmbracelet/crush/internal/session"
 )
@@ -235,11 +236,11 @@ func (t *turnGovernor) observeToolCall(toolName, input string) bool {
 	}
 	t.counters.RepeatedCallCount = repeat
 
-	report := t.gov.Observe(governor.Action{
-		Kind:        governor.ActionSearch,
-		Fingerprint: fingerprint,
-		At:          time.Now(),
-	})
+	// The action is recorded once, by its result (see observeToolResult),
+	// with a fingerprint naming what it touched. Recording it here as well
+	// double-counted every call and classified all of them as searches, which
+	// made an ordinary round look like repeated exploration.
+
 	// Only the hard level refuses anything, and only an already-answered
 	// repeat. Everything below it steers. A repeat seen often enough to be
 	// the dominant pattern is refused even before the pressure ladder
@@ -248,11 +249,16 @@ func (t *turnGovernor) observeToolCall(toolName, input string) bool {
 	if repeat >= threshold {
 		return true
 	}
-	return report.Level == governor.LevelHard && repeat > 0
+	return repeat > 0 && t.gov.Report().Level == governor.LevelHard
 }
 
 // observeToolResult records a completed tool call.
-func (t *turnGovernor) observeToolResult(toolName string, isError bool, output string) {
+//
+// The fingerprint is the call's own arguments, which is what makes "the same
+// read again" distinguishable from "a read of a different file". Fingerprinting
+// by tool name made three distinct reads of three distinct files count as three
+// repeats, so every round of ordinary exploring was scored as a loop.
+func (t *turnGovernor) observeToolResult(toolName, input string, isError bool, output string) {
 	if t == nil {
 		return
 	}
@@ -260,14 +266,18 @@ func (t *turnGovernor) observeToolResult(toolName string, isError bool, output s
 	defer t.mu.Unlock()
 
 	kind := actionKindForTool(toolName)
-	t.gov.Observe(governor.Action{
+	fingerprint := toolName
+	if input != "" {
+		fingerprint = toolName + "\x00" + input
+	}
+	report := t.gov.Observe(governor.Action{
 		Kind:        kind,
-		Fingerprint: toolName,
+		Fingerprint: fingerprint,
 		Empty:       isError || strings.TrimSpace(output) == "",
 		At:          time.Now(),
 	})
-	t.counters.Edits = t.gov.Report().Edits
-	t.counters.Runs = t.gov.Report().Runs
+	t.counters.Edits = report.Edits
+	t.counters.Runs = report.Runs
 }
 
 // actionKindForTool maps a Crush tool name to its governor action kind. The
@@ -630,3 +640,21 @@ func (a *sessionAgent) RevertTurn(sessionID string) (tools.RevertReport, error) 
 
 // ErrNothingToRevert is returned when a session has no recorded edits.
 var ErrNothingToRevert = errors.New("no edits to revert in this session")
+
+// toolCallInputByID returns the arguments a completed call was made with.
+//
+// The result message carries the call ID but not the arguments, and the
+// governor needs the arguments to tell a repeat from a new request. Reading them
+// from the assistant message that requested the call is the only place they
+// exist at the moment a result arrives.
+func toolCallInputByID(toolCallID string, assistant *message.Message) string {
+	if assistant == nil || toolCallID == "" {
+		return ""
+	}
+	for _, call := range assistant.ToolCalls() {
+		if call.ID == toolCallID {
+			return call.Input
+		}
+	}
+	return ""
+}

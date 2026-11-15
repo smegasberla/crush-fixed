@@ -1138,8 +1138,14 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 			// Steering notes are the whole point of the governor: they only
 			// work if the model reads them, and the one place it always reads
 			// is the prompt it is about to receive.
+			//
+			// They are appended, never prepended. The provider caches the
+			// longest identical prefix of a request, so inserting anything
+			// before the system prompt changes the first byte and makes the
+			// whole prompt uncached, which costs more time than the note can
+			// save. Appending leaves every earlier byte untouched.
 			if notes := turnGov.takeNotes(); len(notes) > 0 {
-				prepared.Messages = append([]fantasy.Message{fantasy.NewSystemMessage(governanceNotesText(notes))}, prepared.Messages...)
+				prepared.Messages = append(prepared.Messages, fantasy.NewUserMessage(governanceNotesText(notes)))
 			}
 
 			sessionLock.Lock()
@@ -1270,7 +1276,7 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 			if !toolResult.IsError && toolResult.Name != "" {
 				completedToolCalls.Set(toolResult.Name, struct{}{})
 			}
-			turnGov.observeToolResult(toolResult.Name, toolResult.IsError, toolResult.Content)
+			turnGov.observeToolResult(toolResult.Name, toolCallInputByID(toolResult.ToolCallID, currentAssistant), toolResult.IsError, toolResult.Content)
 			// A mutation invalidates every cached read: the workspace the
 			// cached results describe no longer exists.
 			if !toolResult.IsError && newFilesTouchedByName(toolResult.Name) {

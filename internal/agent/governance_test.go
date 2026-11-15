@@ -91,7 +91,7 @@ func TestTurnGovernorRoundLifecycle(t *testing.T) {
 	require.Equal(t, len("thinking about the build"), turn.counters.ReasoningChars)
 	require.Equal(t, len("the build fails"), turn.counters.ProseChars)
 
-	turn.observeToolResult("edit", false, "edited a.go")
+	turn.observeToolResult("edit", `{"file_path":"a.go"}`, false, "edited a.go")
 	require.Equal(t, 1, turn.counters.Edits)
 
 	turn.beginRound()
@@ -354,7 +354,7 @@ func TestTurnGovernorNilMethodsAreSafe(t *testing.T) {
 	turn.observeReasoning("x")
 	turn.observeProse("x")
 	require.False(t, turn.observeToolCall("edit", "{}"))
-	turn.observeToolResult("edit", false, "ok")
+	turn.observeToolResult("edit", `{"file_path":"a.go"}`, false, "ok")
 	require.Empty(t, turn.endRound(roundOutcome{}))
 	require.Empty(t, turn.takeNotes())
 	turn.recordReasoning(1, true, 1)
