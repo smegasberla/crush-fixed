@@ -97,3 +97,15 @@ func TestCacheAvoidsCharsOnRepeatedLargeBodies(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, 5000, cache.Stats().CharsAvoided)
 }
+
+func TestRecheckable(t *testing.T) {
+	t.Parallel()
+
+	require.True(t, Recheckable("bash"))
+	require.True(t, Recheckable("diagnostics"))
+	require.False(t, Recheckable("view"), "a read is cached differently")
+	require.False(t, Recheckable("edit"))
+
+	require.True(t, ShellWrites(`{"command":"sed -i 's/a/b/' f.go"}`))
+	require.False(t, ShellWrites(`{"command":"go test ./..."}`))
+}

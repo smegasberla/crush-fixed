@@ -74,6 +74,26 @@ func (c *ResultCache) Store(key, value string) {
 	c.entries[key] = value
 }
 
+// recheckGuardKeys are the tools whose answers a re-run can only reproduce. A
+// build or a test that already passed on this exact workspace says nothing new
+// the second time, and a model that runs it again is spending a round to
+// re-learn what it already knows.
+var recheckGuardKeys = map[string]struct{}{
+	"bash": {}, "diagnostics": {}, "lsp_diagnostics": {}, "lsp_restart": {},
+}
+
+// Recheckable reports whether answering this call a second time with the first
+// answer is safe and honest.
+//
+// It is the narrow half of the cache: only a verification command qualifies,
+// because its result is a function of the workspace, and the cache is cleared on
+// every mutation, so a guarded answer can never describe a workspace that has
+// since changed.
+func Recheckable(toolName string) bool {
+	_, ok := recheckGuardKeys[toolName]
+	return ok
+}
+
 // Invalidate drops everything the cache holds. It is called on any mutation:
 // after an edit, the previous read results describe a file that no longer
 // exists as read.

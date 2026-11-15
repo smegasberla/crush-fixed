@@ -2,7 +2,9 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
+	"strings"
 	"time"
 
 	"charm.land/fantasy"
@@ -10,6 +12,7 @@ import (
 	"github.com/charmbracelet/crush/internal/config"
 	"github.com/charmbracelet/crush/internal/governor"
 	"github.com/charmbracelet/crush/internal/speed"
+	"github.com/charmbracelet/crush/internal/validate"
 )
 
 // SpeedOptions carries the request-latency settings. Nil disables the layer.
@@ -51,6 +54,11 @@ type turnSpeed struct {
 	// planCap is the batch cap for the turn.
 	planCap int
 	dedupe  bool
+	// rechecks counts how many needless re-verifications were answered from
+	// the previous result instead of being run again.
+	rechecks int
+	// guardRechecks is whether a repeated verification may be refused.
+	guardRechecks bool
 }
 
 // newTurnSpeed builds the turn's state, or nil when the layer is off.
@@ -69,6 +77,8 @@ func newTurnSpeed(state *speedState) *turnSpeed {
 	if state.settings.GetPrefetch() {
 		turn.prefetch = speed.NewPrefetcher()
 	}
+	// The recheck guard rides on the cache, so it needs one to exist.
+	turn.guardRechecks = state.settings.GetRecheckGuard()
 	return turn
 }
 
@@ -156,6 +166,11 @@ func (t *turnSpeed) logStats(sessionID string) {
 	if t.cache != nil {
 		cacheStats = t.cache.Stats()
 	}
+	if t.rechecks > 0 {
+		slog.Info("Refused a needless recheck",
+			"session_id", sessionID, "count", t.rechecks,
+			"detail", "an identical command already produced this answer on the same workspace")
+	}
 	prefetchStats := speed.PrefetchStats{}
 	if t.prefetch != nil {
 		prefetchStats = t.prefetch.Stats()
@@ -220,20 +235,27 @@ type cachedTool struct {
 	turn  func() *turnSpeed
 	// cacheable reports whether this tool's calls may be cached.
 	cacheable bool
+	// recheck reports whether an identical re-run may be answered from the
+	// previous result. It applies only to verification commands, whose answer
+	// is a function of the workspace the cache is invalidated on.
+	recheck bool
 }
 
 // wrapToolsWithResultCache returns tools wrapped so a repeated read is answered
-// from the turn's cache. It returns the slice unchanged when the layer is off.
+// from the turn's cache and a repeated verification is not re-run. It returns
+// the slice unchanged when the layer is off.
 func wrapToolsWithResultCache(tools []fantasy.AgentTool, turn *turnSpeed) []fantasy.AgentTool {
 	if turn == nil || turn.cache == nil {
 		return tools
 	}
 	out := make([]fantasy.AgentTool, len(tools))
 	for i, tool := range tools {
+		name := tool.Info().Name
 		out[i] = &cachedTool{
 			inner:     tool,
 			turn:      func() *turnSpeed { return turn },
-			cacheable: cacheableToolName(tool.Info().Name),
+			cacheable: cacheableToolName(name),
+			recheck:   speed.Recheckable(name),
 		}
 	}
 	return out
@@ -264,7 +286,18 @@ func (c *cachedTool) SetProviderOptions(opts fantasy.ProviderOptions) {
 // result for a possible repeat.
 func (c *cachedTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
 	turn := c.turn()
-	if !c.cacheable || turn == nil {
+	if turn == nil || (!c.cacheable && !c.recheck) {
+		return c.inner.Run(ctx, call)
+	}
+	// A re-run is only refused when it provably cannot differ: the tool is a
+	// verification, the call is a validation command, and it does not write.
+	// Anything else runs normally, because a second run of a command that
+	// produces new output is not a recheck.
+	guarded := turn.guardRechecks && c.recheck && !c.cacheable && callRecheckEligible(call)
+	if !c.cacheable && !guarded {
+		// Neither cacheable nor a reproducible check: run it, and do not
+		// remember the answer. A shell command that lists files or writes is
+		// exactly this case.
 		return c.inner.Run(ctx, call)
 	}
 	key := turn.cacheKey(call.Name, call.Input)
@@ -272,6 +305,11 @@ func (c *cachedTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.To
 		return c.inner.Run(ctx, call)
 	}
 	if cached, ok := turn.lookup(key); ok {
+		if guarded {
+			turn.noteRecheck()
+			slog.Debug("Verification not re-run", "tool", call.Name)
+			return fantasy.NewTextResponse(notReRunNote(call.Name, cached)), nil
+		}
 		slog.Debug("Tool result served from cache", "tool", call.Name, "chars", len(cached))
 		return fantasy.NewTextResponse(cached), nil
 	}
@@ -279,6 +317,79 @@ func (c *cachedTool) Run(ctx context.Context, call fantasy.ToolCall) (fantasy.To
 	if err != nil || response.IsError || response.Content == "" {
 		return response, err
 	}
+	// A failed verification is not stored: re-running it is how a fix is
+	// confirmed, and a cached failure would hide the fix.
+	if guarded && responseIsFailure(response.Content) {
+		return response, err
+	}
 	turn.store(key, response.Content)
+	if guarded {
+		return fantasy.WithResponseMetadata(
+			fantasy.NewTextResponse(response.Content+"\n\n"+firstRunNote()),
+			response.Metadata,
+		), err
+	}
 	return response, err
+}
+
+// callRecheckEligible reports whether this specific call may be answered from
+// its previous result.
+//
+// For a shell command that means it is a build, test or type check and not a
+// write: `go test` cannot produce a different answer on an unchanged workspace,
+// while `git status` can, because the user may have changed something outside.
+func callRecheckEligible(call fantasy.ToolCall) bool {
+	switch call.Name {
+	case "bash":
+		return validate.IsValidationCommand(inputCommand(call.Input)) && !speed.ShellWrites(call.Input)
+	default:
+		return !speed.ShellWrites(call.Input)
+	}
+}
+
+// inputCommand extracts a shell command from a tool call's arguments.
+func inputCommand(input string) string {
+	var payload struct {
+		Command string `json:"command"`
+	}
+	if err := json.Unmarshal([]byte(input), &payload); err != nil {
+		return input
+	}
+	return payload.Command
+}
+
+// noteRecheck records one refused re-verification.
+func (t *turnSpeed) noteRecheck() {
+	if t == nil {
+		return
+	}
+	t.rechecks++
+}
+
+// firstRunNote is appended to a verification result the first time it is
+// produced, so the model knows the answer is now known for this workspace.
+func firstRunNote() string {
+	return "[This is the result for the current workspace. It does not need to be run again unless a file changes.]"
+}
+
+// notReRunNote is the whole answer for a repeated verification.
+func notReRunNote(toolName, previous string) string {
+	return "[Not run again: " + toolName + " already produced this result on the current workspace, and nothing has changed since. " +
+		"Re-running it would return the same thing.\n\n" + previous + "]"
+}
+
+// responseIsFailure reports whether a verification output says the check failed.
+// It is deliberately conservative: anything that names a failure, an error, or a
+// non-zero exit counts, so a failure is never cached.
+func responseIsFailure(content string) bool {
+	lower := strings.ToLower(content)
+	for _, marker := range []string{
+		"build failed", "failed", "failure", "error", "exit status 1", "exit code 1",
+		"panic:", "--- fail", "fatal", "not ok",
+	} {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
 }

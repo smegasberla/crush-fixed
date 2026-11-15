@@ -1856,7 +1856,21 @@ func (a *sessionAgent) summarize(ctx context.Context, sessionID, trigger string,
 		return err
 	}
 
-	summaryPromptText := buildSummaryPrompt(currentSession.Todos)
+	// A brief for exactly this prefix may already exist: the chain hash covers
+	// every byte the summary would absorb, so a hit is proof the work is done.
+	// Reusing it costs one file read instead of a model call, and its
+	// constraints are carried into the new brief so the earliest turns still
+	// reach the next assistant.
+	var previousBrief string
+	chain := ""
+	if a.reduction.enabled() {
+		chain = chainFor("", foldedFor)
+		if brief, ok := a.reduction.summaryFor(chain); ok {
+			previousBrief = brief
+			slog.Info("Reusing a continuation brief", "session_id", sessionID, "chars", len(brief))
+		}
+	}
+	summaryPromptText := buildContinuationPrompt(currentSession.Todos, previousBrief)
 
 	resp, err := agent.Stream(genCtx, fantasy.AgentStreamCall{
 		Prompt:          summaryPromptText,
@@ -1942,8 +1956,7 @@ func (a *sessionAgent) summarize(ctx context.Context, sessionID, trigger string,
 
 	// Memoize the brief so a rebuild over the same prefix costs nothing. The
 	// chain covers exactly the messages this summary absorbed.
-	if a.reduction.enabled() {
-		chain := chainFor("", foldedFor)
+	if a.reduction.enabled() && chain != "" {
 		if brief := summaryMessage.Content().Text; brief != "" {
 			a.reduction.rememberSummary(chain, len(msgs), brief)
 		}
@@ -2877,15 +2890,30 @@ func (a *sessionAgent) workaroundProviderMediaLimitations(messages []fantasy.Mes
 
 // buildSummaryPrompt constructs the prompt text for session summarization.
 func buildSummaryPrompt(todos []session.Todo) string {
+	return buildContinuationPrompt(todos, "")
+}
+
+// buildContinuationPrompt asks for the brief, and folds in what the previous
+// brief established.
+//
+// The previous brief is carried forward rather than regenerated: the earliest
+// turns established constraints that a summary written from the tail alone would
+// lose, and re-deriving them is exactly what a long session cannot afford.
+func buildContinuationPrompt(todos []session.Todo, previousBrief string) string {
 	var sb strings.Builder
-	sb.WriteString("Provide a detailed summary of our conversation above.")
+	sb.WriteString("Write the continuation brief for the conversation above.")
+	if previousBrief != "" {
+		sb.WriteString("\n\nA brief from earlier in this session already exists. Keep every fact and constraint in it that is still true, and add what this part of the conversation established. Do not repeat what it already says in different words.\n\n")
+		sb.WriteString("<previous_brief>\n")
+		sb.WriteString(previousBrief)
+		sb.WriteString("\n</previous_brief>")
+	}
 	if len(todos) > 0 {
-		sb.WriteString("\n\n## Current Todo List\n\n")
+		sb.WriteString("\n\n<current_plan>\n")
 		for _, t := range todos {
 			fmt.Fprintf(&sb, "- [%s] %s\n", t.Status, t.Content)
 		}
-		sb.WriteString("\nInclude these tasks and their statuses in your summary. ")
-		sb.WriteString("Instruct the resuming assistant to use the `todos` tool to continue tracking progress on these tasks.")
+		sb.WriteString("</current_plan>\n\nCarry these steps into the brief with their statuses, so the next assistant continues the plan instead of restating it.")
 	}
 	return sb.String()
 }

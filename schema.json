@@ -1284,6 +1284,11 @@
           "type": "boolean",
           "description": "Drop tool calls identical to an earlier call in the same round",
           "default": true
+        },
+        "recheck_guard": {
+          "type": "boolean",
+          "description": "Do not re-run a build or test that already passed on the current workspace",
+          "default": true
         }
       },
       "additionalProperties": false,

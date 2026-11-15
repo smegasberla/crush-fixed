@@ -644,6 +644,10 @@ type SpeedOptions struct {
 	// DedupeCalls drops a tool call identical to an earlier one in the same
 	// round.
 	DedupeCalls *bool `json:"dedupe_calls,omitempty" jsonschema:"description=Drop tool calls identical to an earlier call in the same round,default=true"`
+	// RecheckGuard refuses to re-run a verification command that already
+	// produced its answer on the current workspace. The answer is returned
+	// with a note saying it was not re-run.
+	RecheckGuard *bool `json:"recheck_guard,omitempty" jsonschema:"description=Do not re-run a build or test that already passed on the current workspace,default=true"`
 }
 
 // Defaults for the request-latency layer.
@@ -713,6 +717,14 @@ func (s *SpeedOptions) GetDedupeCalls() bool {
 		return true
 	}
 	return boolOr(s.DedupeCalls, true)
+}
+
+// GetRecheckGuard reports whether a repeated verification is refused.
+func (s *SpeedOptions) GetRecheckGuard() bool {
+	if s == nil {
+		return true
+	}
+	return boolOr(s.RecheckGuard, true)
 }
 
 // EditSafetyOptions configures the edit engine's bounds. Every field is

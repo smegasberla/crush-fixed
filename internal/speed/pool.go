@@ -320,3 +320,10 @@ func (p *Prefetcher) Pending() int {
 	defer p.mu.Unlock()
 	return len(p.started) + len(p.results)
 }
+
+// ShellWrites reports whether a shell tool call's arguments write to the
+// workspace. It is exported for callers that must not treat a writing command as
+// a reproducible verification.
+func ShellWrites(arguments string) bool {
+	return shellWrites(arguments)
+}

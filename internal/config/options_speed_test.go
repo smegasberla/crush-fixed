@@ -77,3 +77,14 @@ func TestSpeedFromJSON(t *testing.T) {
 	require.False(t, settings.GetPrefetch())
 	require.True(t, settings.GetAdaptiveTimeout(), "unset fields keep their defaults")
 }
+
+func TestRecheckGuardDefault(t *testing.T) {
+	t.Parallel()
+
+	var nilOptions *Options
+	require.True(t, nilOptions.GetSpeed().GetRecheckGuard())
+
+	off := false
+	settings := &SpeedOptions{RecheckGuard: &off}
+	require.False(t, settings.GetRecheckGuard())
+}
