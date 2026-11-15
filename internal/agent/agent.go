@@ -43,6 +43,7 @@ import (
 	"github.com/charmbracelet/crush/internal/config"
 	"github.com/charmbracelet/crush/internal/contextreduction"
 	"github.com/charmbracelet/crush/internal/csync"
+	"github.com/charmbracelet/crush/internal/editsafe"
 	"github.com/charmbracelet/crush/internal/hooks"
 	"github.com/charmbracelet/crush/internal/message"
 	"github.com/charmbracelet/crush/internal/nudge"
@@ -303,6 +304,16 @@ type sessionAgent struct {
 	// governance is the turn-governance layer: exploration pressure, nudge
 	// policy and the completion gate. Nil disables it.
 	governance *governanceState
+	// editSafety holds the edit bounds. Nil uses the defaults.
+	editSafety *config.EditSafetyOptions
+	// editMu guards lastJournal: a turn installs its journal here once, and a
+	// revert reads it from another goroutine.
+	editMu sync.Mutex
+	// lastJournal is the most recent turn's edit journal, so the turn can be
+	// reverted.
+	lastJournal *editsafe.Journal
+	// workingDir is the root an expected edit path is resolved against.
+	workingDir string
 }
 
 type SessionAgentOptions struct {
@@ -329,6 +340,11 @@ type SessionAgentOptions struct {
 	Reduction *ReductionOptions
 	// Governance carries the turn-governance settings. Nil disables it.
 	Governance *GovernanceOptions
+	// EditSafety carries the edit bounds. Nil uses the defaults.
+	EditSafety *config.EditSafetyOptions
+	// WorkingDir is the project root, used to resolve the paths a request
+	// names into absolute ones.
+	WorkingDir string
 }
 
 func NewSessionAgent(
@@ -354,6 +370,8 @@ func NewSessionAgent(
 		titles:               cmp.Or(opts.titles, new(titleTracker)),
 		reduction:            newReductionState(opts.Reduction),
 		governance:           newGovernanceState(opts.Governance),
+		editSafety:           opts.EditSafety,
+		workingDir:           opts.WorkingDir,
 		dispatchMu:           csync.NewMap[string, *sync.Mutex](),
 		acceptedRuns:         csync.NewMap[string, int](),
 		cancelMark:           csync.NewMap[string, uint64](),
@@ -964,6 +982,23 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 	// cancel func were already created and registered under the dispatch
 	// mutex above for both the accepted and in-process paths.
 	ctx = context.WithValue(ctx, tools.SessionIDContextKey, call.SessionID)
+
+	// The turn's edit state: what this turn owns, what it changed, and the
+	// bounds a change must respect. An edit to a file the request did not
+	// name is allowed until the cap, and every change is journalled so the
+	// turn can be reverted.
+	editTurn := tools.NewEditTurnState(tools.EditTurnConfig{
+		Limits:         a.editLimits(),
+		ExpectedPaths:  a.expectedEditPaths(msgs, call),
+		InterceptShell: a.interceptShellEdits(),
+		Journal:        a.journalEdits(),
+	})
+	ctx = tools.WithEditTurnState(ctx, editTurn)
+	if editTurn.Journal != nil {
+		a.editMu.Lock()
+		a.lastJournal = editTurn.Journal
+		a.editMu.Unlock()
+	}
 
 	history, files := a.preparePrompt(msgs, largeModel.CatwalkCfg.Capabilities.Vision, largeModel.CatwalkCfg.Capabilities.Audio, call.Attachments...)
 

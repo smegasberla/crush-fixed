@@ -1,12 +1,14 @@
 package agent
 
 import (
+	"errors"
 	"log/slog"
 	"strings"
 	"sync"
 	"time"
 
 	"charm.land/fantasy"
+	"github.com/charmbracelet/crush/internal/agent/tools"
 	"github.com/charmbracelet/crush/internal/config"
 	"github.com/charmbracelet/crush/internal/contextreduction"
 	"github.com/charmbracelet/crush/internal/governor"
@@ -600,3 +602,31 @@ func sessionTodos(todos []session.Todo) []todoState {
 func repeatedProseCount(text string) int {
 	return contextreduction.CollapseRepeatedProse(text).RemovedSentences
 }
+
+// RevertTurn undoes the edits of the last turn in this session, newest change
+// first, and reports what happened.
+//
+// It refuses to overwrite a file that changed after the edit: discarding a
+// change the agent did not make is a bigger loss than an incomplete revert, and
+// the skipped file is named so the caller can decide.
+func (a *sessionAgent) RevertTurn(sessionID string) (tools.RevertReport, error) {
+	a.editMu.Lock()
+	journal := a.lastJournal
+	a.editMu.Unlock()
+	if journal == nil {
+		return tools.RevertReport{}, ErrNothingToRevert
+	}
+	result, err := journal.Revert()
+	if err != nil {
+		return tools.RevertReport{}, err
+	}
+	return tools.RevertReport{
+		Restored:  result.Restored,
+		Removed:   result.Removed,
+		Recreated: result.Recreated,
+		Skipped:   result.Skipped,
+	}, nil
+}
+
+// ErrNothingToRevert is returned when a session has no recorded edits.
+var ErrNothingToRevert = errors.New("no edits to revert in this session")

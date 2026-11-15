@@ -266,6 +266,15 @@ func NewBashTool(permissions permission.Service, workingDir, spillDir string, at
 				return fantasy.NewTextErrorResponse("missing command"), nil
 			}
 
+			// A shell command that edits exactly one file in place is routed
+			// to the edit engine instead of run: the engine validates against
+			// one snapshot, keeps the file's conventions and proves what
+			// landed, where a `sed -i` reports success even when it matched
+			// nothing.
+			if intercepted, ok := interceptShellEdit(ctx, params.Command, cmp.Or(params.WorkingDir, workingDir)); ok {
+				return fantasy.NewTextResponse(intercepted), nil
+			}
+
 			// Determine working directory
 			execWorkingDir := cmp.Or(params.WorkingDir, workingDir)
 

@@ -494,6 +494,82 @@ type Options struct {
 	// when the work stops paying for itself, and refuses claims the turn's
 	// own evidence does not support.
 	Governance GovernanceOptions `json:"governance,omitempty" jsonschema:"description=Turn governance settings (exploration pressure\\, nudges\\, completion gate\\, reasoning metrics)"`
+
+	// EditSafety bounds what one edit may do and how far a turn may wander
+	// with writes.
+	EditSafety EditSafetyOptions `json:"edit_safety,omitempty" jsonschema:"description=Edit safety settings (diff bound\\, unexpected-file bound\\, shell interception)"`
+}
+
+// EditSafetyOptions configures the edit engine's bounds. Every field is
+// optional; nil or zero selects the documented default.
+type EditSafetyOptions struct {
+	// Enabled turns the bounds on or off. Nil means enabled.
+	Enabled *bool `json:"enabled,omitempty" jsonschema:"description=Enable edit safety bounds,default=true"`
+	// MaxExpectedDiffPercent is the largest share of a file's lines one edit
+	// may change.
+	MaxExpectedDiffPercent *int `json:"max_expected_diff_percent,omitempty" jsonschema:"description=Largest share of a file's lines one edit may change,default=80,example=50"`
+	// MaxUnexpectedFiles is how many files a turn may edit that the request
+	// did not name.
+	MaxUnexpectedFiles *int `json:"max_unexpected_files,omitempty" jsonschema:"description=Files a turn may edit beyond the ones the request named,default=12,example=5"`
+	// InterceptShell routes a single-file in-place shell edit to the edit
+	// engine instead of running it.
+	InterceptShell *bool `json:"intercept_shell,omitempty" jsonschema:"description=Route single-file in-place shell edits to the edit engine,default=true"`
+	// Journal keeps what each edit changed so the turn can be reverted.
+	Journal *bool `json:"journal,omitempty" jsonschema:"description=Record each edit so the turn can be reverted,default=true"`
+}
+
+// Defaults for edit safety.
+const (
+	DefaultMaxExpectedDiffPercent = 80
+	DefaultMaxUnexpectedFiles     = 12
+)
+
+// GetEditSafety returns the edit-safety settings, never nil.
+func (o *Options) GetEditSafety() *EditSafetyOptions {
+	if o == nil {
+		return &EditSafetyOptions{}
+	}
+	return &o.EditSafety
+}
+
+// EditSafetyEnabled reports whether the bounds run at all.
+func (e *EditSafetyOptions) EditSafetyEnabled() bool {
+	if e == nil {
+		return true
+	}
+	return boolOr(e.Enabled, true)
+}
+
+// GetMaxExpectedDiffPercent returns the diff bound.
+func (e *EditSafetyOptions) GetMaxExpectedDiffPercent() int {
+	if e == nil {
+		return DefaultMaxExpectedDiffPercent
+	}
+	return positiveIntOr(e.MaxExpectedDiffPercent, DefaultMaxExpectedDiffPercent)
+}
+
+// GetMaxUnexpectedFiles returns the unexpected-file bound.
+func (e *EditSafetyOptions) GetMaxUnexpectedFiles() int {
+	if e == nil {
+		return DefaultMaxUnexpectedFiles
+	}
+	return positiveIntOr(e.MaxUnexpectedFiles, DefaultMaxUnexpectedFiles)
+}
+
+// GetInterceptShell reports whether shell edits are routed to the engine.
+func (e *EditSafetyOptions) GetInterceptShell() bool {
+	if e == nil {
+		return true
+	}
+	return boolOr(e.InterceptShell, true)
+}
+
+// GetJournal reports whether edits are recorded for a revert.
+func (e *EditSafetyOptions) GetJournal() bool {
+	if e == nil {
+		return true
+	}
+	return boolOr(e.Journal, true)
 }
 
 // GovernanceOptions configures turn governance. Every field is optional; nil

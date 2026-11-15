@@ -23,9 +23,29 @@ import (
 
 type EditParams struct {
 	FilePath   string `json:"file_path" description:"The absolute path to the file to modify"`
-	OldString  string `json:"old_string" description:"The text to replace"`
-	NewString  string `json:"new_string" description:"The text to replace it with"`
-	ReplaceAll bool   `json:"replace_all,omitempty" description:"Replace all occurrences of old_string (default false)"`
+	OldString  string `json:"old_string,omitempty" description:"The text to replace"`
+	NewString  string `json:"new_string,omitempty" description:"The text to replace it with"`
+	ReplaceAll bool   `json:"replace_all,omitempty" description:"Change EVERY occurrence of old_string. Only when that is the intent."`
+	// Line addressing lets the model edit text it has not copied verbatim.
+	Line    int    `json:"line,omitempty" description:"1-based line to replace, for when the current text cannot be quoted exactly. Requires expect."`
+	EndLine int    `json:"end_line,omitempty" description:"1-based inclusive end of the region to replace. Defaults to line."`
+	Expect  string `json:"expect,omitempty" description:"Text that must be present at the addressed line. It proves the line number is not stale; without it a wrong address silently edits the wrong line."`
+	Delete  bool   `json:"delete,omitempty" description:"Remove the addressed region instead of replacing it. Requires expect, because a deletion reveals nothing about a stale number."`
+	// Ops applies several regions of THIS one file as one transaction, all
+	// validated against one snapshot.
+	Ops []EditOpParams `json:"ops,omitempty" description:"Several regions of this one file as one transaction. Each item carries old_string/new_string, or line/end_line/expect with optional delete. All are validated against one snapshot, and nothing is written if any one fails."`
+}
+
+// EditOpParams is one region of a multi-region edit.
+type EditOpParams struct {
+	ID         string `json:"id,omitempty" description:"Short name for this op, so a refusal can point at it."`
+	OldString  string `json:"old_string,omitempty" description:"The text to replace."`
+	NewString  string `json:"new_string,omitempty" description:"The text to replace it with."`
+	Line       int    `json:"line,omitempty" description:"1-based line to address."`
+	EndLine    int    `json:"end_line,omitempty" description:"1-based inclusive end of the addressed region."`
+	Expect     string `json:"expect,omitempty" description:"Text that must be present at the addressed line."`
+	Delete     bool   `json:"delete,omitempty" description:"Remove the addressed region."`
+	ReplaceAll bool   `json:"replace_all,omitempty" description:"Change every occurrence of old_string."`
 }
 
 type EditPermissionsParams struct {
@@ -76,7 +96,13 @@ func NewEditTool(
 
 			editCtx := editContext{ctx, permissions, files, filetracker, workingDir}
 
-			if params.OldString == "" {
+			// A multi-region batch, or an addressed single edit, goes through
+			// the transactional engine: it validates every op against one
+			// snapshot, preserves the file's conventions, and proves the
+			// committed bytes by reading them back.
+			if len(params.Ops) > 0 || params.Line > 0 {
+				response, err = transactionalEdit(editCtx, params, call)
+			} else if params.OldString == "" {
 				response, err = createNewFile(editCtx, params.FilePath, params.NewString, call)
 			} else if params.NewString == "" {
 				response, err = deleteContent(editCtx, params.FilePath, params.OldString, params.ReplaceAll, call)
@@ -93,10 +119,14 @@ func NewEditTool(
 				return response, nil
 			}
 
-			notifyLSPs(ctx, lspManager, params.FilePath)
+			if lspManager != nil {
+				notifyLSPs(ctx, lspManager, params.FilePath)
+			}
 
 			text := fmt.Sprintf("<result>\n%s\n</result>\n", response.Content)
-			text += getDiagnostics(params.FilePath, lspManager)
+			if lspManager != nil {
+				text += getDiagnostics(params.FilePath, lspManager)
+			}
 			response.Content = text
 			return response, nil
 		},

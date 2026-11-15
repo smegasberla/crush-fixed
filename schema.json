@@ -213,6 +213,43 @@
       "additionalProperties": false,
       "type": "object"
     },
+    "EditSafetyOptions": {
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Enable edit safety bounds",
+          "default": true
+        },
+        "max_expected_diff_percent": {
+          "type": "integer",
+          "description": "Largest share of a file's lines one edit may change",
+          "default": 80,
+          "examples": [
+            50
+          ]
+        },
+        "max_unexpected_files": {
+          "type": "integer",
+          "description": "Files a turn may edit beyond the ones the request named",
+          "default": 12,
+          "examples": [
+            5
+          ]
+        },
+        "intercept_shell": {
+          "type": "boolean",
+          "description": "Route single-file in-place shell edits to the edit engine",
+          "default": true
+        },
+        "journal": {
+          "type": "boolean",
+          "description": "Record each edit so the turn can be reverted",
+          "default": true
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
     "EffortLevel": {
       "properties": {
         "value": {
@@ -870,6 +907,10 @@
         "governance": {
           "$ref": "#/$defs/GovernanceOptions",
           "description": "Turn governance settings (exploration pressure, nudges, completion gate, reasoning metrics)"
+        },
+        "edit_safety": {
+          "$ref": "#/$defs/EditSafetyOptions",
+          "description": "Edit safety settings (diff bound, unexpected-file bound, shell interception)"
         }
       },
       "additionalProperties": false,

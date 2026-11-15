@@ -1006,6 +1006,8 @@ func (c *coordinator) buildAgentWithModels(ctx context.Context, ready *errgroup.
 		RunComplete:          c.runComplete,
 		Reduction:            c.reductionOptions(large),
 		Governance:           c.governanceConfigFor(),
+		EditSafety:           c.editSafetyConfig(),
+		WorkingDir:           c.cfg.WorkingDir(),
 		Hooks:                c.hookRunner,
 		titles:               &c.titles,
 	})

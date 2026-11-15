@@ -8,6 +8,8 @@ import (
 	"charm.land/fantasy"
 	"github.com/charmbracelet/crush/internal/config"
 	"github.com/charmbracelet/crush/internal/contextreduction"
+	"github.com/charmbracelet/crush/internal/editsafe"
+	"github.com/charmbracelet/crush/internal/message"
 )
 
 // ReductionOptions carries the context-reduction settings an agent uses. It is
@@ -345,4 +347,70 @@ func (c *coordinator) reductionOptions(model Model) *ReductionOptions {
 		Provider:  model.ModelCfg.Provider,
 		Model:     model.ModelCfg.Model,
 	}
+}
+
+// editLimits returns the bounds one edit must respect, from the governance
+// settings.
+func (a *sessionAgent) editLimits() editsafe.Limits {
+	limits := editsafe.DefaultLimits()
+	if a.editSafety == nil {
+		return limits
+	}
+	if percent := a.editSafety.GetMaxExpectedDiffPercent(); percent > 0 {
+		limits.MaxDiffPercent = percent
+	}
+	if files := a.editSafety.GetMaxUnexpectedFiles(); files > 0 {
+		limits.MaxUnexpectedFiles = files
+	}
+	return limits
+}
+
+// interceptShellEdits reports whether a single-file in-place shell edit is
+// routed to the edit engine.
+func (a *sessionAgent) interceptShellEdits() bool {
+	if a.editSafety == nil {
+		return true
+	}
+	return a.editSafety.GetInterceptShell()
+}
+
+// journalEdits reports whether edits are recorded for a revert.
+func (a *sessionAgent) journalEdits() bool {
+	if a.editSafety == nil {
+		return true
+	}
+	return a.editSafety.GetJournal()
+}
+
+// expectedEditPaths returns the files the request named, so an edit to them is
+// never counted as unexpected. It reads the paths out of the user's own text:
+// the turn's contract is what the user asked for, not what the model decided.
+func (a *sessionAgent) expectedEditPaths(msgs []message.Message, call SessionAgentCall) []string {
+	text := call.Prompt
+	for _, msg := range msgs {
+		if msg.Role != message.User {
+			continue
+		}
+		text += "\n" + msg.Content().Text
+	}
+	paths := contextreduction.PathsIn(text, 32)
+	abs := make([]string, 0, len(paths))
+	for _, path := range paths {
+		if filepath.IsAbs(path) {
+			abs = append(abs, path)
+			continue
+		}
+		abs = append(abs, filepath.Join(a.workingDir, path))
+	}
+	return abs
+}
+
+// editSafetyConfig returns the edit-safety settings from the loaded config, or
+// nil when the user disabled them.
+func (c *coordinator) editSafetyConfig() *config.EditSafetyOptions {
+	settings := c.cfg.Config().Options.GetEditSafety()
+	if !settings.EditSafetyEnabled() {
+		return nil
+	}
+	return settings
 }
