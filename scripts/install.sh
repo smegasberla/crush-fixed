@@ -100,8 +100,36 @@ Darwin | Linux) ;;
 *) die "this script supports macOS and Linux; on Windows run scripts/install.ps1" ;;
 esac
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+# Resolve the checkout to build from.
+#
+# Run from a checkout, that is the checkout. Piped from curl there is no script
+# file, so the repository is cloned to a temporary directory instead: the build
+# always comes from source, never from a downloaded binary.
+REPO_SLUG="smegasberla/crush-fixed"
+REPO_URL="https://github.com/${REPO_SLUG}.git"
+REPO_REF="${CRUSH_INSTALL_REF:-main}"
+
+SOURCE_DIR=""
+if [ -n "${BASH_SOURCE[0]:-}" ] && [ -f "${BASH_SOURCE[0]:-}" ]; then
+	SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+fi
+
+clone_dir=""
+resolve_source() {
+	if [ -n "${SOURCE_DIR}" ] && [ -f "${SOURCE_DIR}/go.mod" ]; then
+		REPO_DIR="${SOURCE_DIR}"
+		return 0
+	fi
+	command -v git >/dev/null 2>&1 || die "git is required to fetch the source when running this script from a URL"
+	clone_dir="$(mktemp -d)"
+	trap 'rm -rf "${clone_dir}"' EXIT
+	note "fetching ${REPO_SLUG} (${REPO_REF})"
+	git clone --depth 1 --branch "${REPO_REF}" "${REPO_URL}" "${clone_dir}/src" >/dev/null 2>&1 ||
+		die "could not clone ${REPO_URL}"
+	REPO_DIR="${clone_dir}/src"
+}
+
+REPO_DIR=""
 TARGET="${PREFIX}/${BIN_NAME}"
 
 # state_dirs are the directories a Crush build keeps user data in. They are
@@ -130,8 +158,16 @@ purge_state() {
 		[ -d "${dir}" ] && note "  ${dir}"
 	done
 	if [ "${DRY_RUN}" -eq 0 ]; then
+		# Piped from curl there is no terminal to prompt on, so the answer is
+		# read from the controlling terminal when one exists. Without one the
+		# purge is refused rather than assumed: deleting sessions is not
+		# something a non-interactive run should decide.
+		if ! [ -t 0 ] && ! [ -r /dev/tty ]; then
+			note "no terminal to confirm on; kept state. Rerun --purge interactively to delete it."
+			return 0
+		fi
 		printf 'Delete them? This cannot be undone. [y/N] '
-		read -r answer
+		read -r answer </dev/tty || answer=""
 		case "${answer}" in
 		y | Y | yes | YES) ;;
 		*)
@@ -143,7 +179,9 @@ purge_state() {
 	for dir in $(state_dirs); do
 		[ -d "${dir}" ] || continue
 		run rm -rf "${dir}"
-		note "deleted ${dir}"
+		if [ "${DRY_RUN}" -eq 0 ]; then
+			note "deleted ${dir}"
+		fi
 	done
 }
 
@@ -156,8 +194,8 @@ if [ "${ACTION}" = "uninstall" ]; then
 	exit 0
 fi
 
-command -v go >/dev/null 2>&1 || die "Go is required to build this checkout (https://go.dev/dl/)"
-[ -f "${REPO_DIR}/go.mod" ] || die "no go.mod in ${REPO_DIR}; run this from the repository"
+command -v go >/dev/null 2>&1 || die "Go is required to build this from source (https://go.dev/dl/)"
+resolve_source
 
 # The version string is baked in so `--version` identifies this build rather
 # than reporting "devel" and looking like a random local compile.

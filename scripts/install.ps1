@@ -43,8 +43,34 @@ if ($As -match '[\\/:*?"<>|]') {
     throw "-As must be a plain file name, not a path"
 }
 
-$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$RepoDir = Split-Path -Parent $ScriptDir
+# Resolve the checkout to build from.
+#
+# Run from a checkout, that is the checkout. Invoked from a URL through `irm`
+# there is no script file, so the repository is cloned to a temporary directory
+# instead: the build always comes from source, never from a downloaded binary.
+$Reposlug = 'smegasberla/crush-fixed'
+$RepoUrl = "https://github.com/$Reposlug.git"
+$RepoRef = if ($env:CRUSH_INSTALL_REF) { $env:CRUSH_INSTALL_REF } else { 'main' }
+
+$CloneDir = $null
+function Resolve-Source {
+    $scriptDir = $null
+    if ($PSCommandPath) { $scriptDir = Split-Path -Parent $PSCommandPath }
+    if ($scriptDir) {
+        $candidate = Split-Path -Parent $scriptDir
+        if (Test-Path (Join-Path $candidate 'go.mod')) { return $candidate }
+    }
+    if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
+        throw 'git is required to fetch the source when running this script from a URL'
+    }
+    $script:CloneDir = Join-Path ([System.IO.Path]::GetTempPath()) ("crush-src-" + [guid]::NewGuid().ToString('N'))
+    Write-Note "fetching $Reposlug ($RepoRef)"
+    & git clone --depth 1 --branch $RepoRef $RepoUrl (Join-Path $CloneDir 'src') | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "could not clone $RepoUrl" }
+    return (Join-Path $CloneDir 'src')
+}
+
+$RepoDir = $null
 $Target = Join-Path $Prefix "$As.exe"
 
 # The directories a Crush build keeps user data in. They are shared with any
@@ -76,6 +102,13 @@ function Remove-CrushState {
     Write-Note 'with any other Crush build on this machine:'
     $dirs | ForEach-Object { Write-Note "  $_" }
     if (-not $DryRun) {
+        # Invoked through `irm | iex` there is no interactive host, so a purge
+        # is refused rather than assumed: deleting sessions is not something a
+        # non-interactive run should decide.
+        if (-not [Environment]::UserInteractive) {
+            Write-Note 'no terminal to confirm on; kept state. Run the script interactively to purge it.'
+            return
+        }
         $answer = Read-Host 'Delete them? This cannot be undone. [y/N]'
         if ($answer -notmatch '^(y|yes)$') {
             Write-Note 'kept state; nothing was deleted'
@@ -84,7 +117,7 @@ function Remove-CrushState {
     }
     foreach ($dir in $dirs) {
         Invoke-Step -Description "delete $dir" -Step { Remove-Item -Recurse -Force $dir }
-        Write-Note "deleted $dir"
+        if (-not $DryRun) { Write-Note "deleted $dir" }
     }
 }
 
@@ -96,11 +129,9 @@ if ($Action -eq 'uninstall') {
 }
 
 if (-not (Get-Command go -ErrorAction SilentlyContinue)) {
-    throw 'Go is required to build this checkout (https://go.dev/dl/)'
+    throw 'Go is required to build this from source (https://go.dev/dl/)'
 }
-if (-not (Test-Path (Join-Path $RepoDir 'go.mod'))) {
-    throw "no go.mod in $RepoDir; run this from the repository"
-}
+$RepoDir = Resolve-Source
 
 $Version = 'fixed'
 $Commit = 'unknown'
@@ -173,4 +204,5 @@ try {
     }
 } finally {
     Remove-Item -Recurse -Force $BuildDir -ErrorAction SilentlyContinue
+    if ($CloneDir) { Remove-Item -Recurse -Force $CloneDir -ErrorAction SilentlyContinue }
 }
