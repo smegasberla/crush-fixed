@@ -1377,13 +1377,30 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 		},
 		StopWhen: []fantasy.StopCondition{
 			func(_ []fantasy.StepResult) bool {
+				if a.disableAutoSummarize {
+					return false
+				}
 				cw := int64(largeModel.CatwalkCfg.ContextWindow)
+				tokens := currentSession.CompletionTokens + currentSession.PromptTokens
+
+				// The configured trigger wins when it is set, because it is
+				// the number the user chose for cost, not just for survival.
+				// Waiting until the window is nearly full means every request
+				// carries the whole transcript, which is what makes a long
+				// session expensive rather than slow.
+				if trigger := a.compactionTriggerTokens(); trigger > 0 {
+					if tokens >= trigger && (!a.reduction.enabled() || a.reduction.canCompact()) {
+						shouldSummarize = true
+						return true
+					}
+					return false
+				}
+
 				// If context window is unknown (0), skip auto-summarize
 				// to avoid immediately truncating custom/local models.
 				if cw == 0 {
 					return false
 				}
-				tokens := currentSession.CompletionTokens + currentSession.PromptTokens
 				remaining := cw - tokens
 				var threshold int64
 				if cw > largeContextWindowThreshold {
@@ -1391,7 +1408,7 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 				} else {
 					threshold = int64(float64(cw) * smallContextWindowRatio)
 				}
-				if (remaining <= threshold) && !a.disableAutoSummarize {
+				if remaining <= threshold {
 					shouldSummarize = true
 					return true
 				}

@@ -62,33 +62,18 @@ func TestShellConfigOptionUIRejectsInvalidValue(t *testing.T) {
 	require.Contains(t, err.Error(), "expects unified or split")
 }
 
-func TestShellConfigOptionAttribution(t *testing.T) {
+func TestShellConfigOptionAttributionIsIgnored(t *testing.T) {
 	store := loadCrushSh(t, `option attribution-trailer-style none
 option attribution-generated-with false`)
 
-	attribution := store.Config().Options.Attribution
-	require.NotNil(t, attribution)
-	require.Equal(t, "none", string(attribution.TrailerStyle))
-	require.False(t, attribution.GeneratedWith)
-}
-
-func TestShellConfigOptionAttributionTrailerStylePreservesGeneratedWithDefault(t *testing.T) {
-	store := loadCrushSh(t, `option attribution-trailer-style co-authored-by`)
-
-	attribution := store.Config().Options.Attribution
-	require.NotNil(t, attribution)
-	require.Equal(t, "co-authored-by", string(attribution.TrailerStyle))
-	require.True(t, attribution.GeneratedWith)
-}
-
-func TestShellConfigOptionAttributionGeneratedWithCaseInsensitive(t *testing.T) {
-	store := loadCrushSh(t, `option attribution-generated-with YES`)
-
-	require.NotNil(t, store.Config().Options.Attribution)
-	require.True(t, store.Config().Options.Attribution.GeneratedWith)
+	// The option still parses, so an existing crushrc keeps working, and it has
+	// no effect: this build never writes an attribution trailer.
+	require.Nil(t, store.Config().Options.Attribution)
 }
 
 func TestShellConfigOptionAttributionRejectsInvalidStyle(t *testing.T) {
+	// The value is still validated, so a typo is reported rather than
+	// silently accepted.
 	_, err := loadCrushShErr(t, `option attribution-trailer-style bogus`)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "expects none, co-authored-by, or assisted-by")

@@ -202,19 +202,33 @@ func (r *reductionState) repack(system string, messages []fantasy.Message, adver
 	outcome.Ceiling = ceiling
 	outcome.Before = contextreduction.Summarize(system, messages).Total()
 	outcome.After = outcome.Before
-	if outcome.Before <= ceiling {
-		return messages, outcome
-	}
 
-	// 1. Duplicate readings of the same file.
-	out, pointerStats := contextreduction.SupersededReadStubs(messages, r.pointerOptions())
-	// 2. Aged tool-result bodies.
-	out, digestStats := contextreduction.DigestToolResults(out, r.digestOptions())
-	// 3. Whole messages, front first.
-	out, dropped := dropOldestToCeiling(system, out, ceiling)
+	// Digesting and superseded-read stubbing run every round, not only when
+	// the prompt hits the ceiling. Stale tool output is stale the moment the
+	// next round starts: waiting until the window is nearly full means every
+	// request in between pays for output nothing will read again, which is
+	// most of the cost of a long session.
+	//
+	// Only dropping whole messages waits for the ceiling, because that is the
+	// change that actually loses conversation.
+	out := messages
+	var pointerStats contextreduction.PointerStats
+	var digestStats contextreduction.DigestStats
+	if outcome.Before > 0 {
+		out, pointerStats = contextreduction.SupersededReadStubs(messages, r.pointerOptions())
+		out, digestStats = contextreduction.DigestToolResults(out, r.digestOptions())
+	}
 	outcome.PointerStubs = pointerStats.Stubbed
 	outcome.Digested = digestStats.Digested
 	outcome.Deduplicated = digestStats.Deduplicated
+	outcome.After = contextreduction.Summarize(system, out).Total()
+
+	if outcome.Before <= ceiling {
+		return out, outcome
+	}
+
+	// Whole messages, front first, once the cheap stages were not enough.
+	out, dropped := dropOldestToCeiling(system, out, ceiling)
 	outcome.DroppedMessages = dropped
 	outcome.After = contextreduction.Summarize(system, out).Total()
 	outcome.OverBudget = outcome.After > ceiling
@@ -413,4 +427,23 @@ func (c *coordinator) editSafetyConfig() *config.EditSafetyOptions {
 		return nil
 	}
 	return settings
+}
+
+// compactionTriggerTokens returns the prompt size that starts a compaction, or 0
+// to fall back to the model's window.
+//
+// It is the number the user chose for cost. Compacting only when the window is
+// nearly full means every request in between carries the whole transcript, so a
+// long session pays for the entire history on every round.
+func (a *sessionAgent) compactionTriggerTokens() int64 {
+	if a.reduction == nil || a.reduction.settings == nil {
+		return 0
+	}
+	return int64(a.reduction.settings.GetCompactionTriggerTokens())
+}
+
+// canCompact reports whether there is enough transcript for a compaction to do
+// anything. Compacted below this, a summary would cost more than it saves.
+func (r *reductionState) canCompact() bool {
+	return r != nil && r.settings != nil
 }

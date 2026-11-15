@@ -12,18 +12,16 @@
             "co-authored-by",
             "assisted-by"
           ],
-          "description": "Style of attribution trailer to add to commits",
-          "default": "assisted-by"
+          "description": "Ignored: this build never writes an attribution trailer"
         },
         "co_authored_by": {
           "type": "boolean",
-          "description": "Deprecated: use trailer_style instead",
+          "description": "Ignored",
           "deprecated": true
         },
         "generated_with": {
           "type": "boolean",
-          "description": "Add Generated with Crush line to commit messages and issues and PRs",
-          "default": true
+          "description": "Ignored: this build never writes a Generated with line"
         }
       },
       "additionalProperties": false,
@@ -875,7 +873,7 @@
         },
         "attribution": {
           "$ref": "#/$defs/Attribution",
-          "description": "Attribution settings for generated content"
+          "description": "Accepted for compatibility and ignored: this build never writes an attribution trailer"
         },
         "disable_metrics": {
           "type": "boolean",

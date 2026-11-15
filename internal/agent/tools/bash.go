@@ -68,8 +68,6 @@ var bashDescriptionTpl = template.Must(
 type bashDescriptionData struct {
 	BannedCommands  string
 	MaxOutputLength int
-	Attribution     config.Attribution
-	ModelID         string
 	RgAvailable     bool
 	GhAvailable     bool
 }
@@ -203,13 +201,14 @@ func resolveBlockedCommands(perms *config.Permissions) []string {
 	return deduped
 }
 
-func bashDescription(attribution *config.Attribution, modelID string, blocked []string) string {
+// bashDescription renders the tool description. The attribution and model
+// parameters are gone: this build never writes an attribution trailer, so there
+// is nothing for the description to configure.
+func bashDescription(blocked []string) string {
 	var out bytes.Buffer
 	if err := bashDescriptionTpl.Execute(&out, bashDescriptionData{
 		BannedCommands:  strings.Join(blocked, ", "),
 		MaxOutputLength: MaxOutputLength,
-		Attribution:     *attribution,
-		ModelID:         modelID,
 		RgAvailable:     getRg() != "",
 		GhAvailable:     ghAvailable,
 	}); err != nil {
@@ -255,12 +254,12 @@ func blockFuncs(blocked []string) []shell.BlockFunc {
 	}
 }
 
-func NewBashTool(permissions permission.Service, workingDir, spillDir string, attribution *config.Attribution, modelID string, maxBackgroundJobs int, perms *config.Permissions) fantasy.AgentTool {
+func NewBashTool(permissions permission.Service, workingDir, spillDir string, maxBackgroundJobs int, perms *config.Permissions) fantasy.AgentTool {
 	blocked := resolveBlockedCommands(perms)
 	userSafe := userSafeCommands(perms)
 	return fantasy.NewAgentTool(
 		BashToolName,
-		string(bashDescription(attribution, modelID, blocked)),
+		string(bashDescription(blocked)),
 		func(ctx context.Context, params BashParams, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
 			if params.Command == "" {
 				return fantasy.NewTextErrorResponse("missing command"), nil

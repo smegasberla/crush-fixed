@@ -1,93 +1,29 @@
 package config
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 )
 
-func TestAttributionMigration(t *testing.T) {
+// TestAttributionIsAcceptedAndIgnored documents this build's behaviour: a config
+// that still carries an attribution block must keep loading, and the block must
+// have no effect, because no attribution trailer is ever written.
+func TestAttributionIsAcceptedAndIgnored(t *testing.T) {
 	t.Parallel()
 
-	tests := []struct {
-		name             string
-		configJSON       string
-		expectedTrailer  TrailerStyle
-		expectedGenerate bool
-	}{
-		{
-			name: "old setting co_authored_by=true migrates to co-authored-by",
-			configJSON: `{
-				"options": {
-					"attribution": {
-						"co_authored_by": true,
-						"generated_with": false
-					}
-				}
-			}`,
-			expectedTrailer:  TrailerStyleCoAuthoredBy,
-			expectedGenerate: false,
-		},
-		{
-			name: "old setting co_authored_by=false migrates to none",
-			configJSON: `{
-				"options": {
-					"attribution": {
-						"co_authored_by": false,
-						"generated_with": true
-					}
-				}
-			}`,
-			expectedTrailer:  TrailerStyleNone,
-			expectedGenerate: true,
-		},
-		{
-			name: "new setting takes precedence over old setting",
-			configJSON: `{
-				"options": {
-					"attribution": {
-						"trailer_style": "assisted-by",
-						"co_authored_by": true,
-						"generated_with": false
-					}
-				}
-			}`,
-			expectedTrailer:  TrailerStyleAssistedBy,
-			expectedGenerate: false,
-		},
-		{
-			name: "default when neither setting present",
-			configJSON: `{
-				"options": {
-					"attribution": {
-						"generated_with": true
-					}
-				}
-			}`,
-			expectedTrailer:  TrailerStyleAssistedBy,
-			expectedGenerate: true,
-		},
-		{
-			name: "default when attribution is null",
-			configJSON: `{
-				"options": {}
-			}`,
-			expectedTrailer:  TrailerStyleAssistedBy,
-			expectedGenerate: true,
-		},
+	cases := []string{
+		`{"options": {"attribution": {"co_authored_by": true, "generated_with": false}}}`,
+		`{"options": {"attribution": {"trailer_style": "assisted-by", "generated_with": true}}}`,
+		`{"options": {"attribution": {"trailer_style": "none"}}}`,
+		`{"options": {}}`,
 	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			cfg, err := loadFromBytes([][]byte{[]byte(tt.configJSON)})
-			require.NoError(t, err)
-
-			cfg.setDefaults(t.TempDir(), "")
-
-			require.Equal(t, tt.expectedTrailer, cfg.Options.Attribution.TrailerStyle)
-			require.Equal(t, tt.expectedGenerate, cfg.Options.Attribution.GeneratedWith)
-		})
+	for _, body := range cases {
+		var cfg Config
+		require.NoError(t, json.Unmarshal([]byte(body), &cfg))
+		cfg.setDefaults("/tmp", "/tmp/.crush")
+		require.Nil(t, cfg.Options.Attribution,
+			"the attribution block is cleared, so nothing can read it")
 	}
 }
