@@ -1008,6 +1008,7 @@ func (c *coordinator) buildAgentWithModels(ctx context.Context, ready *errgroup.
 		Governance:           c.governanceConfigFor(),
 		EditSafety:           c.editSafetyConfig(),
 		Speed:                c.speedConfigFor(),
+		Leverage:             c.leverageConfigFor(),
 		WorkingDir:           c.cfg.WorkingDir(),
 		Hooks:                c.hookRunner,
 		titles:               &c.titles,

@@ -186,6 +186,12 @@ func (c *coordinator) speedConfigFor() *SpeedOptions {
 	return &SpeedOptions{Settings: settings}
 }
 
+// cacheReadTokens returns how many of a round's input tokens the provider served
+// from its prefix cache. It is logged so a prefix-cache regression is visible: a
+// prompt that changes near the front shows up here as zero, not as a mystery
+// slowdown.
+func cacheReadTokens(usage fantasy.Usage) int64 { return usage.CacheReadTokens }
+
 // speedFor returns the turn's latency state, or nil when the layer is off.
 func (a *sessionAgent) speedFor() *turnSpeed {
 	return newTurnSpeed(a.speed)

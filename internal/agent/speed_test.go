@@ -255,3 +255,10 @@ func TestCachedToolDelegatesInfo(t *testing.T) {
 	require.Nil(t, wrapped.ProviderOptions())
 	wrapped.SetProviderOptions(nil)
 }
+
+func TestCacheReadTokens(t *testing.T) {
+	t.Parallel()
+
+	require.Equal(t, int64(0), cacheReadTokens(fantasy.Usage{}))
+	require.Equal(t, int64(42), cacheReadTokens(fantasy.Usage{CacheReadTokens: 42}))
+}

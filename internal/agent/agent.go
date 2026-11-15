@@ -314,6 +314,9 @@ type sessionAgent struct {
 	lastJournal *editsafe.Journal
 	// speed is the request-latency layer. Nil disables it.
 	speed *speedState
+	// leverage is the long-session layer: project memory, prompt layering,
+	// verification memory and reply hygiene. Nil disables it.
+	leverage *leverageState
 	// workingDir is the root an expected edit path is resolved against.
 	workingDir string
 }
@@ -349,6 +352,8 @@ type SessionAgentOptions struct {
 	WorkingDir string
 	// Speed carries the request-latency settings. Nil disables the layer.
 	Speed *SpeedOptions
+	// Leverage carries the long-session settings. Nil disables the layer.
+	Leverage *LeverageOptions
 }
 
 func NewSessionAgent(
@@ -376,6 +381,7 @@ func NewSessionAgent(
 		governance:           newGovernanceState(opts.Governance),
 		editSafety:           opts.EditSafety,
 		speed:                newSpeedState(opts.Speed),
+		leverage:             newLeverageState(opts.Leverage),
 		workingDir:           opts.WorkingDir,
 		dispatchMu:           csync.NewMap[string, *sync.Mutex](),
 		acceptedRuns:         csync.NewMap[string, int](),
@@ -976,7 +982,10 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 
 	// Add the user message to the session. The context sent ahead of the
 	// prompt is stored with it so later requests replay the same text.
-	modelContext := hostContextPrompt(call.HostContext) + notesPrompt(a.takeNotes(call.SessionID))
+	// Project memory is retrieved before the turn so a lesson learned earlier
+	// can change what this turn does, not just what it says afterwards.
+	memoryBlock := a.leverage.memoryBlock(ctx, call.Prompt)
+	modelContext := hostContextPrompt(call.HostContext) + notesPrompt(a.takeNotes(call.SessionID)) + memoryBlock
 	_, err = a.createUserMessage(ctx, call, modelContext)
 	if err != nil {
 		return nil, err
@@ -1322,6 +1331,10 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 				return getSessionErr
 			}
 			usage, estimated := fallbackStepUsage(stepMessages, stepResult)
+			if cached := cacheReadTokens(usage); cached > 0 {
+				slog.Debug("Provider served part of the prompt from cache",
+					"session_id", call.SessionID, "cache_read_tokens", cached, "input_tokens", usage.InputTokens)
+			}
 			pricingModel := a.modelForStepCost(largeModel, stepResult.ProviderMetadata)
 			a.updateSessionUsage(pricingModel, &updatedSession, usage, a.openrouterCost(stepResult.ProviderMetadata), estimated)
 			_, sessionErr := a.sessions.Save(ctx, updatedSession)
@@ -1571,6 +1584,15 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 
 	if finished {
 		turnSpeed.logStats(call.SessionID)
+	}
+
+	// Clean template debris out of the answer before the user sees it. This is
+	// presentation only: the reasoning behind the answer is untouched.
+	if finished && currentAssistant != nil {
+		if cleaned := a.leverage.cleanReply(currentAssistant.Content().Text); cleaned != currentAssistant.Content().Text {
+			currentAssistant.SetContent(cleaned)
+			_ = a.messages.Update(ctx, *currentAssistant)
+		}
 	}
 
 	// Record the turn's reasoning behaviour. This is the measured half of the

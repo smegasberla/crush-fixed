@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	_ "embed"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"html/template"
@@ -46,19 +47,45 @@ func viewDescription() string {
 }
 
 type ViewParams struct {
-	FilePath string `json:"file_path" description:"The path to the file to read"`
+	FilePath string `json:"file_path,omitempty" description:"The path to the file to read"`
 	Offset   int    `json:"offset,omitempty" description:"The line number to start reading from (0-based)"`
 	Limit    int    `json:"limit,omitempty" description:"The number of lines to read (defaults to 200)"`
 	Metadata bool   `json:"metadata,omitempty" description:"Return only the header (size, line count, line endings) with no content. Cheap, and the way to decide whether a range is worth reading."`
 	Keep     bool   `json:"keep,omitempty" description:"Return the body even when this exact file range was already read this session with unchanged content. Use when the pointer is not enough."`
+	// Around centres the read on this 1-based line instead of offset, which is
+	// what a search result needs: it names a line, not a range.
+	Around int `json:"around,omitempty" description:"1-based line to centre the read on. Use it with a line number from a search result instead of guessing an offset."`
+	// Context is how many lines each side of Around to include.
+	Context int `json:"context,omitempty" description:"Lines of context each side of around (default 40)."`
+	// Files reads several files in one call, which is one round trip for the
+	// whole batch.
+	Files []ViewFileParams `json:"files,omitempty" description:"Read several files in one call. Each item takes name plus any of offset/limit/around/context/metadata."`
+}
+
+// ViewFileParams is one file in a batched read.
+type ViewFileParams struct {
+	FilePath string `json:"name" description:"The path to the file to read."`
+	Offset   int    `json:"offset,omitempty" description:"0-based line to start reading from."`
+	Limit    int    `json:"limit,omitempty" description:"How many lines to read."`
+	Around   int    `json:"around,omitempty" description:"1-based line to centre the read on."`
+	Context  int    `json:"context,omitempty" description:"Lines of context each side of around."`
+	Metadata bool   `json:"metadata,omitempty" description:"Return only the header."`
+}
+
+// ViewBatchResponseMetadata lists the files a batched read returned.
+type ViewBatchResponseMetadata struct {
+	Files []ViewResponseMetadata `json:"files"`
 }
 
 type ViewPermissionsParams struct {
-	FilePath string `json:"file_path"`
-	Offset   int    `json:"offset"`
-	Limit    int    `json:"limit"`
-	Metadata bool   `json:"metadata,omitempty"`
-	Keep     bool   `json:"keep,omitempty"`
+	FilePath string   `json:"file_path"`
+	Offset   int      `json:"offset"`
+	Limit    int      `json:"limit"`
+	Around   int      `json:"around,omitempty"`
+	Context  int      `json:"context,omitempty"`
+	Files    []string `json:"files,omitempty"`
+	Metadata bool     `json:"metadata,omitempty"`
+	Keep     bool     `json:"keep,omitempty"`
 }
 
 type ViewResourceType string
@@ -81,6 +108,9 @@ const (
 	MaxViewSize      = 200 * 1024 // 200KB
 	DefaultReadLimit = 200
 	MaxLineLength    = 2000
+	// DefaultAroundContext is how many lines each side of "around" a read
+	// includes. It is wide enough to show a function and its signature.
+	DefaultAroundContext = 40
 )
 
 type contentTooLargeError struct {
@@ -120,8 +150,22 @@ func NewViewToolWithMemo(
 		ViewToolName,
 		viewDescription(),
 		func(ctx context.Context, params ViewParams, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
+			if len(params.Files) > 0 {
+				return runBatchedView(ctx, params, lspManager, permissions, filetracker, skillTracker, workingDir, skillsPaths)
+			}
 			if params.FilePath == "" {
 				return fantasy.NewTextErrorResponse("file_path is required"), nil
+			}
+
+			// A search result names a line, so "around" turns that line into a
+			// range instead of making the caller subtract 40 and guess.
+			if params.Around > 0 {
+				contextLines := params.Context
+				if contextLines <= 0 {
+					contextLines = DefaultAroundContext
+				}
+				params.Offset = max(params.Around-contextLines-1, 0)
+				params.Limit = contextLines*2 + 1
 			}
 
 			// Handle builtin skill files (crush: prefix).
@@ -164,7 +208,7 @@ func NewViewToolWithMemo(
 						ToolName:    ViewToolName,
 						Action:      "read",
 						Description: fmt.Sprintf("Read file outside working directory: %s", absFilePath),
-						Params:      ViewPermissionsParams(params),
+						Params:      viewPermissionsParams(params),
 					},
 				)
 				if permReqErr != nil {
@@ -620,4 +664,71 @@ func lineEndingName(crlf, lines int) string {
 	default:
 		return "mixed"
 	}
+}
+
+// runBatchedView reads several files in one call. It stops collecting after the
+// first failure only for that file: one unreadable path must not lose the others,
+// because the caller asked for them together precisely to save a round.
+func runBatchedView(
+	ctx context.Context,
+	params ViewParams,
+	lspManager *lsp.Manager,
+	permissions permission.Service,
+	filetracker filetracker.Service,
+	skillTracker *skills.Tracker,
+	workingDir string,
+	skillsPaths []string,
+) (fantasy.ToolResponse, error) {
+	tool := NewViewToolWithMemo(nil, lspManager, permissions, filetracker, skillTracker, workingDir, skillsPaths...)
+	var sb strings.Builder
+	failed := 0
+	for _, file := range params.Files {
+		single := ViewParams{
+			FilePath: file.FilePath,
+			Offset:   file.Offset,
+			Limit:    file.Limit,
+			Around:   file.Around,
+			Context:  file.Context,
+			Metadata: file.Metadata,
+			Keep:     params.Keep,
+		}
+		input, err := json.Marshal(single)
+		if err != nil {
+			failed++
+			continue
+		}
+		resp, err := tool.Run(ctx, fantasy.ToolCall{ID: "batch", Name: ViewToolName, Input: string(input)})
+		if err != nil {
+			failed++
+			sb.WriteString(fmt.Sprintf("--- %s ---\nfailed: %s\n\n", file.FilePath, err))
+			continue
+		}
+		if resp.IsError {
+			failed++
+			sb.WriteString(fmt.Sprintf("--- %s ---\n%s\n\n", file.FilePath, resp.Content))
+			continue
+		}
+		sb.WriteString(resp.Content)
+		sb.WriteString("\n\n")
+	}
+	if failed > 0 {
+		sb.WriteString(fmt.Sprintf("%d of %d paths could not be read; the rest are above.", failed, len(params.Files)))
+	}
+	return fantasy.NewTextResponse(strings.TrimRight(sb.String(), "\n")), nil
+}
+
+// viewPermissionsParams projects a read request into the permission payload.
+func viewPermissionsParams(params ViewParams) ViewPermissionsParams {
+	out := ViewPermissionsParams{
+		FilePath: params.FilePath,
+		Offset:   params.Offset,
+		Limit:    params.Limit,
+		Around:   params.Around,
+		Context:  params.Context,
+		Metadata: params.Metadata,
+	}
+	for _, file := range params.Files {
+		out.Files = append(out.Files, file.FilePath)
+	}
+	return out
 }

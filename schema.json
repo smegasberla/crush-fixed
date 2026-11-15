@@ -459,6 +459,63 @@
       },
       "type": "object"
     },
+    "LeverageOptions": {
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Enable the long-session layer",
+          "default": true
+        },
+        "project_memory": {
+          "type": "boolean",
+          "description": "Inject remembered project lessons",
+          "default": true
+        },
+        "memory_limit": {
+          "type": "integer",
+          "description": "Memories injected per turn",
+          "default": 8,
+          "examples": [
+            4
+          ]
+        },
+        "prompt_layering": {
+          "type": "boolean",
+          "description": "Keep the cacheable prompt prefix byte-stable",
+          "default": true
+        },
+        "verification_memory": {
+          "type": "boolean",
+          "description": "Remember failures and detect the verification command",
+          "default": true
+        },
+        "reply_hygiene": {
+          "type": "boolean",
+          "description": "Clean template debris from replies",
+          "default": true
+        },
+        "goal_tree": {
+          "type": "boolean",
+          "description": "Require evidence before completing a planned step",
+          "default": true
+        },
+        "resume_probe": {
+          "type": "boolean",
+          "description": "Offer to resume unfinished work",
+          "default": true
+        },
+        "resume_max_age_hours": {
+          "type": "integer",
+          "description": "Hours unfinished work stays resumable",
+          "default": 72,
+          "examples": [
+            24
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
     "MCPChannelReply": {
       "properties": {
         "user": {
@@ -915,6 +972,10 @@
         "speed": {
           "$ref": "#/$defs/SpeedOptions",
           "description": "Request latency settings (connect policy, result cache, prefetch, batch cap)"
+        },
+        "leverage": {
+          "$ref": "#/$defs/LeverageOptions",
+          "description": "Long-session leverage (project memory, prompt layering, verification memory, reply hygiene)"
         }
       },
       "additionalProperties": false,

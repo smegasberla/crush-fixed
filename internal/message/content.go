@@ -387,6 +387,20 @@ func (m *Message) AppendContent(delta string) {
 	}
 }
 
+// SetContent replaces the message's prose, keeping its other parts. It is used by
+// presentation passes that clean the answer after it was generated: the
+// reasoning and tool parts are what the turn did and must not be rewritten.
+func (m *Message) SetContent(text string) {
+	for i, part := range m.Parts {
+		if c, ok := part.(TextContent); ok {
+			c.Text = text
+			m.Parts[i] = c
+			return
+		}
+	}
+	m.Parts = append(m.Parts, TextContent{Text: text})
+}
+
 func (m *Message) AppendReasoningContent(delta string) {
 	found := false
 	for i, part := range m.Parts {

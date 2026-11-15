@@ -503,6 +503,120 @@ type Options struct {
 	// sees: a learned connect timeout, a per-turn result cache, speculative
 	// prefetch and a batch cap.
 	Speed SpeedOptions `json:"speed,omitempty" jsonschema:"description=Request latency settings (connect policy\\, result cache\\, prefetch\\, batch cap)"`
+
+	// Leverage is the long-session layer: project memory, layered prompts,
+	// verification memory and reply hygiene.
+	Leverage LeverageOptions `json:"leverage,omitempty" jsonschema:"description=Long-session leverage (project memory\\, prompt layering\\, verification memory\\, reply hygiene)"`
+}
+
+// LeverageOptions configures the long-session layer. Every field is optional;
+// nil selects the documented default.
+type LeverageOptions struct {
+	// Enabled turns the layer on or off. Nil means enabled.
+	Enabled *bool `json:"enabled,omitempty" jsonschema:"description=Enable the long-session layer,default=true"`
+	// ProjectMemory injects remembered lessons for the project.
+	ProjectMemory *bool `json:"project_memory,omitempty" jsonschema:"description=Inject remembered project lessons,default=true"`
+	// MemoryLimit is how many memories may be injected per turn.
+	MemoryLimit *int `json:"memory_limit,omitempty" jsonschema:"description=Memories injected per turn,default=8,example=4"`
+	// PromptLayering keeps the cacheable prompt prefix byte-stable.
+	PromptLayering *bool `json:"prompt_layering,omitempty" jsonschema:"description=Keep the cacheable prompt prefix byte-stable,default=true"`
+	// VerificationMemory remembers failures across rounds and detects a
+	// project's verification command.
+	VerificationMemory *bool `json:"verification_memory,omitempty" jsonschema:"description=Remember failures and detect the verification command,default=true"`
+	// ReplyHygiene cleans template debris from a reply before it is shown.
+	ReplyHygiene *bool `json:"reply_hygiene,omitempty" jsonschema:"description=Clean template debris from replies,default=true"`
+	// GoalTree requires evidence before a planned step may be completed.
+	GoalTree *bool `json:"goal_tree,omitempty" jsonschema:"description=Require evidence before completing a planned step,default=true"`
+	// ResumeProbe offers to resume work the last session left open.
+	ResumeProbe *bool `json:"resume_probe,omitempty" jsonschema:"description=Offer to resume unfinished work,default=true"`
+	// ResumeMaxAgeHours is how old unfinished work may be and still be offered.
+	ResumeMaxAgeHours *int `json:"resume_max_age_hours,omitempty" jsonschema:"description=Hours unfinished work stays resumable,default=72,example=24"`
+}
+
+// Defaults for the long-session layer.
+const (
+	DefaultMemoryLimit      = 8
+	DefaultResumeMaxAgeHour = 72
+)
+
+// GetLeverage returns the leverage settings, never nil.
+func (o *Options) GetLeverage() *LeverageOptions {
+	if o == nil {
+		return &LeverageOptions{}
+	}
+	return &o.Leverage
+}
+
+// LeverageEnabled reports whether the layer runs at all.
+func (l *LeverageOptions) LeverageEnabled() bool {
+	if l == nil {
+		return true
+	}
+	return boolOr(l.Enabled, true)
+}
+
+// GetProjectMemory reports whether project memories are injected.
+func (l *LeverageOptions) GetProjectMemory() bool {
+	if l == nil {
+		return true
+	}
+	return boolOr(l.ProjectMemory, true)
+}
+
+// GetMemoryLimit returns how many memories may be injected per turn.
+func (l *LeverageOptions) GetMemoryLimit() int {
+	if l == nil {
+		return DefaultMemoryLimit
+	}
+	return positiveIntOr(l.MemoryLimit, DefaultMemoryLimit)
+}
+
+// GetPromptLayering reports whether the prompt is layered.
+func (l *LeverageOptions) GetPromptLayering() bool {
+	if l == nil {
+		return true
+	}
+	return boolOr(l.PromptLayering, true)
+}
+
+// GetVerificationMemory reports whether failures are remembered across rounds.
+func (l *LeverageOptions) GetVerificationMemory() bool {
+	if l == nil {
+		return true
+	}
+	return boolOr(l.VerificationMemory, true)
+}
+
+// GetReplyHygiene reports whether replies are cleaned.
+func (l *LeverageOptions) GetReplyHygiene() bool {
+	if l == nil {
+		return true
+	}
+	return boolOr(l.ReplyHygiene, true)
+}
+
+// GetGoalTree reports whether planned steps need evidence to complete.
+func (l *LeverageOptions) GetGoalTree() bool {
+	if l == nil {
+		return true
+	}
+	return boolOr(l.GoalTree, true)
+}
+
+// GetResumeProbe reports whether unfinished work is offered for resume.
+func (l *LeverageOptions) GetResumeProbe() bool {
+	if l == nil {
+		return true
+	}
+	return boolOr(l.ResumeProbe, true)
+}
+
+// GetResumeMaxAgeHours returns how long unfinished work stays resumable.
+func (l *LeverageOptions) GetResumeMaxAgeHours() int {
+	if l == nil {
+		return DefaultResumeMaxAgeHour
+	}
+	return positiveIntOr(l.ResumeMaxAgeHours, DefaultResumeMaxAgeHour)
 }
 
 // SpeedOptions configures the request-latency layer. Every field is optional;
