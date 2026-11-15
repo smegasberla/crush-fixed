@@ -17,6 +17,7 @@ import (
 	"unicode/utf8"
 
 	"charm.land/fantasy"
+	"github.com/charmbracelet/crush/internal/contextreduction"
 	"github.com/charmbracelet/crush/internal/filepathext"
 	"github.com/charmbracelet/crush/internal/filetracker"
 	"github.com/charmbracelet/crush/internal/lsp"
@@ -48,12 +49,16 @@ type ViewParams struct {
 	FilePath string `json:"file_path" description:"The path to the file to read"`
 	Offset   int    `json:"offset,omitempty" description:"The line number to start reading from (0-based)"`
 	Limit    int    `json:"limit,omitempty" description:"The number of lines to read (defaults to 200)"`
+	Metadata bool   `json:"metadata,omitempty" description:"Return only the header (size, line count, line endings) with no content. Cheap, and the way to decide whether a range is worth reading."`
+	Keep     bool   `json:"keep,omitempty" description:"Return the body even when this exact file range was already read this session with unchanged content. Use when the pointer is not enough."`
 }
 
 type ViewPermissionsParams struct {
 	FilePath string `json:"file_path"`
 	Offset   int    `json:"offset"`
 	Limit    int    `json:"limit"`
+	Metadata bool   `json:"metadata,omitempty"`
+	Keep     bool   `json:"keep,omitempty"`
 }
 
 type ViewResourceType string
@@ -88,6 +93,22 @@ func (e contentTooLargeError) Error() string {
 }
 
 func NewViewTool(
+	lspManager *lsp.Manager,
+	permissions permission.Service,
+	filetracker filetracker.Service,
+	skillTracker *skills.Tracker,
+	workingDir string,
+	skillsPaths ...string,
+) fantasy.AgentTool {
+	return NewViewToolWithMemo(nil, lspManager, permissions, filetracker, skillTracker, workingDir, skillsPaths...)
+}
+
+// NewViewToolWithMemo builds the view tool with a read memo, which lets a
+// repeated view of an unchanged range answer with a compact pointer instead of
+// the whole body. A nil memo disables that behaviour and keeps the tool's
+// original, always-full response.
+func NewViewToolWithMemo(
+	memo *ReadMemo,
 	lspManager *lsp.Manager,
 	permissions permission.Service,
 	filetracker filetracker.Service,
@@ -244,6 +265,31 @@ func NewViewTool(
 				return fantasy.NewTextErrorResponse("File content is not valid UTF-8"), nil
 			}
 
+			// A header-only read costs a few tokens and answers whether a
+			// range is worth reading at all. It is the cheapest way to
+			// avoid a large read the model did not need.
+			if params.Metadata {
+				header, headerErr := fileHeader(filePath, fileInfo.Size(), params.Offset, params.Limit, hasMore)
+				if headerErr != nil {
+					return fantasy.NewTextErrorResponse(fmt.Sprintf("Failed to read file metadata: %s", headerErr)), nil
+				}
+				return fantasy.NewTextResponse(header), nil
+			}
+
+			// A repeated read of the same unchanged range is answered with
+			// a pointer: the body is already in the conversation, and
+			// sending it twice only costs context. "keep" opts out.
+			hash := fileHash(content)
+			if !params.Keep && !isSkillFile {
+				if pointer, seen := memo.Seen(sessionID, filePath, hash, params.Offset, params.Limit); seen {
+					filetracker.RecordRead(ctx, sessionID, filePath)
+					return fantasy.WithResponseMetadata(
+						fantasy.NewTextResponse(pointer),
+						ViewResponseMetadata{FilePath: filePath, Content: pointer},
+					), nil
+				}
+			}
+
 			openInLSPs(ctx, lspManager, filePath)
 			waitForLSPDiagnostics(ctx, lspManager, filePath, 300*time.Millisecond)
 			output := "<file>\n"
@@ -256,6 +302,9 @@ func NewViewTool(
 			output += "\n</file>\n"
 			output += getDiagnostics(filePath, lspManager)
 			filetracker.RecordRead(ctx, sessionID, filePath)
+			if !isSkillFile {
+				memo.Record(sessionID, filePath, hash, contextreduction.EstimateTokens(content), params.Offset, params.Limit)
+			}
 
 			meta := ViewResponseMetadata{
 				FilePath: filePath,
@@ -491,4 +540,84 @@ func readBuiltinFile(params ViewParams, skillTracker *skills.Tracker) (fantasy.T
 		fantasy.NewTextResponse(output),
 		meta,
 	), nil
+}
+
+// fileHeader renders a header-only view of a file: size, line count, line
+// endings and the range that was inspected, with no content. It is what the
+// "metadata" parameter returns.
+//
+// The numbers come from the file's own bytes, not from the line reader: the
+// reader strips carriage returns, so a header built from its output would
+// report the wrong size and claim LF endings for a CRLF file.
+func fileHeader(path string, size int64, offset, limit int, hasMore bool) (string, error) {
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "<file-metadata path=%q>\n", path)
+	fmt.Fprintf(&sb, "bytes: %d\n", size)
+	if limit > 0 {
+		fmt.Fprintf(&sb, "range: %d-%d\n", offset+1, offset+limit)
+	}
+	if hasMore {
+		sb.WriteString("more: yes\n")
+	}
+	raw, err := readHeadBytes(path, MaxViewSize)
+	if err != nil {
+		return "", err
+	}
+	lines, crlf := countLines(raw)
+	fmt.Fprintf(&sb, "lines: %d\n", lines)
+	sb.WriteString("line_endings: " + lineEndingName(crlf, lines) + "\n")
+	sb.WriteString("(content omitted: pass metadata=false to read the body)\n")
+	sb.WriteString("</file-metadata>")
+	return sb.String(), nil
+}
+
+// readHeadBytes reads at most max bytes from the start of a file.
+func readHeadBytes(path string, max int) ([]byte, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	buf := make([]byte, max)
+	n, err := io.ReadFull(file, buf)
+	if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
+		return nil, err
+	}
+	return buf[:n], nil
+}
+
+// countLines returns the number of lines in raw and how many CRLF endings it
+// contains.
+func countLines(raw []byte) (lines int, crlf int) {
+	lf := 0
+	for i, b := range raw {
+		if b != '\n' {
+			continue
+		}
+		lf++
+		if i > 0 && raw[i-1] == '\r' {
+			crlf++
+		}
+	}
+	lines = lf
+	if len(raw) > 0 && raw[len(raw)-1] != '\n' {
+		lines++
+	}
+	return lines, crlf
+}
+
+// lineEndingName names the dominant line ending so an agent knows what it will
+// be writing back. lines is the file's line count and crlf the number of
+// carriage-return pairs it contains.
+func lineEndingName(crlf, lines int) string {
+	switch {
+	case crlf == 0 && lines == 0:
+		return "none"
+	case crlf == 0:
+		return "lf"
+	case crlf == lines:
+		return "crlf"
+	default:
+		return "mixed"
+	}
 }

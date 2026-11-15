@@ -55,3 +55,7 @@ completions/crush.*sh
 .prettierignore
 .task
 /docs-site
+
+# Reverse-engineering workspace (never commit)
+/chaser/
+/CHASER.md

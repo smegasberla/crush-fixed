@@ -41,6 +41,7 @@ import (
 	"github.com/charmbracelet/crush/internal/agent/tools"
 	"github.com/charmbracelet/crush/internal/agent/tools/mcp"
 	"github.com/charmbracelet/crush/internal/config"
+	"github.com/charmbracelet/crush/internal/contextreduction"
 	"github.com/charmbracelet/crush/internal/csync"
 	"github.com/charmbracelet/crush/internal/hooks"
 	"github.com/charmbracelet/crush/internal/message"
@@ -294,6 +295,10 @@ type sessionAgent struct {
 	// across the agent. Cancel uses its current value as the per-session
 	// high-water mark.
 	acceptSeqGen uint64
+	// reduction holds the context-reduction settings and the learned
+	// context ceiling. Nil disables the stack entirely, which is what the
+	// tests that predate it rely on.
+	reduction *reductionState
 }
 
 type SessionAgentOptions struct {
@@ -315,6 +320,9 @@ type SessionAgentOptions struct {
 	Hooks *hooks.Runner
 	// titles is shared by a coordinator's agents so one drain covers all.
 	titles *titleTracker
+	// Reduction carries the context-reduction settings and digest store.
+	// Nil disables the stack.
+	Reduction *ReductionOptions
 }
 
 func NewSessionAgent(
@@ -338,6 +346,7 @@ func NewSessionAgent(
 		notes:                csync.NewMap[string, []string](),
 		activeRequests:       csync.NewMap[string, *activeCancel](),
 		titles:               cmp.Or(opts.titles, new(titleTracker)),
+		reduction:            newReductionState(opts.Reduction),
 		dispatchMu:           csync.NewMap[string, *sync.Mutex](),
 		acceptedRuns:         csync.NewMap[string, int](),
 		cancelMark:           csync.NewMap[string, uint64](),
@@ -951,6 +960,22 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 
 	history, files := a.preparePrompt(msgs, largeModel.CatwalkCfg.Capabilities.Vision, largeModel.CatwalkCfg.Capabilities.Audio, call.Attachments...)
 
+	// Shrink the prompt before it is sent. The stack learns its ceiling from
+	// real provider overflows, so it only bites on sessions that actually
+	// grew too large.
+	history, reduction := a.reducePrompt(systemPrompt, history, int(largeModel.CatwalkCfg.ContextWindow))
+	if reduction.Before > 0 {
+		slog.Debug("Context reduction applied",
+			"session_id", call.SessionID,
+			"ceiling", reduction.Ceiling,
+			"tokens_before", reduction.Before,
+			"tokens_after", reduction.After,
+			"pointer_stubs", reduction.PointerStubs,
+			"digested", reduction.Digested,
+			"deduplicated", reduction.Deduplicated,
+			"dropped_messages", reduction.DroppedMessages)
+	}
+
 	startTime := time.Now()
 	a.eventPromptSent(call.SessionID)
 	a.fireTurnHook(genCtx, call, hooks.Event{Name: hooks.EventTurnStart})
@@ -1261,6 +1286,15 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 
 	if err != nil {
 		isCancelErr := errors.Is(err, context.Canceled)
+		// A provider that rejects the prompt for being too long proves the
+		// ceiling was lower than advertised. Recording it here means the
+		// next attempt (or the next turn) is sized to fit instead of failing
+		// the same way forever.
+		if !isCancelErr && contextreduction.IsContextOverflow(err) {
+			if a.reduction != nil {
+				a.reduction.learnOverflow(promptTokens(history), err)
+			}
+		}
 		slog.Info("Agent stream returned error",
 			"error", err.Error(),
 			"error_type", fmt.Sprintf("%T", err),
@@ -1523,6 +1557,34 @@ func (a *sessionAgent) summarize(ctx context.Context, sessionID, trigger string,
 
 	aiMsgs, _ := a.preparePrompt(msgs, largeModel.CatwalkCfg.Capabilities.Vision, largeModel.CatwalkCfg.Capabilities.Audio)
 
+	// The summarizer is itself a model call. Sending it a prompt that no
+	// longer fits would fail the compaction for the same reason the turn did,
+	// so the same planner bounds what it reads: the digested tail plus a
+	// budget for the summary it will write.
+	//
+	// The chain hash of the folded prefix keys the memo, so re-running
+	// compaction over an unchanged prefix is free and a new brief extends the
+	// previous one instead of re-summarising the whole transcript.
+	foldedFor := aiMsgs
+	if a.reduction.enabled() {
+		var plan contextreduction.Plan
+		foldedFor, plan = contextreduction.Compact(
+			string(summaryPrompt),
+			aiMsgs,
+			a.reduction.settings.GetCompactionSummaryTokens(),
+			a.reduction.compactOptions(),
+		)
+		if plan.Compact {
+			aiMsgs = foldedFor
+			slog.Info("Compaction bounded the transcript it summarizes",
+				"session_id", sessionID,
+				"dropped_messages", plan.DroppedMessages,
+				"kept_messages", plan.KeptMessages,
+				"tokens_before", plan.Total,
+				"budget", plan.Budget)
+		}
+	}
+
 	genCtx, cancel := context.WithCancel(ctx)
 	ac := &activeCancel{cancel: cancel}
 	a.activeRequests.Set(sessionID, ac)
@@ -1632,6 +1694,15 @@ func (a *sessionAgent) summarize(ctx context.Context, sessionID, trigger string,
 	err = a.messages.Update(genCtx, summaryMessage)
 	if err != nil {
 		return err
+	}
+
+	// Memoize the brief so a rebuild over the same prefix costs nothing. The
+	// chain covers exactly the messages this summary absorbed.
+	if a.reduction.enabled() {
+		chain := chainFor("", foldedFor)
+		if brief := summaryMessage.Content().Text; brief != "" {
+			a.reduction.rememberSummary(chain, len(msgs), brief)
+		}
 	}
 
 	a.updateSessionUsage(largeModel, &currentSession, resp.TotalUsage, overrideCost, false)

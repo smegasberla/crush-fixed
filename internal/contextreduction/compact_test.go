@@ -1,0 +1,161 @@
+package contextreduction
+
+import (
+	"strings"
+	"testing"
+
+	"charm.land/fantasy"
+	"github.com/stretchr/testify/require"
+)
+
+// messagesOfSize builds n user messages of roughly tokens each.
+func messagesOfSize(n, tokens int) []fantasy.Message {
+	text := strings.Repeat("x", tokens*BytesPerToken)
+	out := make([]fantasy.Message, 0, n)
+	for range n {
+		out = append(out, userText(text))
+	}
+	return out
+}
+
+func TestCompactNoOpUnderTrigger(t *testing.T) {
+	t.Parallel()
+
+	messages := messagesOfSize(3, 100)
+	out, plan := Compact("", messages, 50, CompactOptions{TriggerTokens: 10000})
+	require.False(t, plan.Compact)
+	require.Equal(t, 0, plan.TailStart)
+	require.Equal(t, len(messages), len(out))
+	require.Equal(t, "within trigger", plan.Reason)
+	require.Equal(t, 300, plan.Total)
+}
+
+func TestCompactDropsTheOldestMessages(t *testing.T) {
+	t.Parallel()
+
+	messages := messagesOfSize(40, 1000)
+	opts := CompactOptions{TriggerTokens: 5000, BudgetTokens: 8000, ReserveTokens: 1000}
+	out, plan := Compact("", messages, 500, opts)
+
+	require.True(t, plan.Compact)
+	require.Positive(t, plan.DroppedMessages)
+	require.Equal(t, len(messages)-plan.DroppedMessages, len(out))
+	// 8000 - 1000 reserve - 500 summary = 6500 tokens of tail.
+	require.LessOrEqual(t, Summarize("", out).Total(), 6500)
+	// The newest message always survives.
+	require.Equal(t, messages[len(messages)-1], out[len(out)-1])
+}
+
+func TestCompactKeepsMinimumTail(t *testing.T) {
+	t.Parallel()
+
+	messages := messagesOfSize(10, 10000)
+	opts := CompactOptions{TriggerTokens: 1000, BudgetTokens: 1000, ReserveTokens: 500, MinTailMessages: 3}
+	out, plan := Compact("", messages, 100, opts)
+	require.True(t, plan.Compact)
+	require.GreaterOrEqual(t, len(out), 3, "a summary with nothing to continue from is useless")
+	require.Equal(t, messages[7], out[0])
+}
+
+func TestCompactHonoursMinTailMessages(t *testing.T) {
+	t.Parallel()
+
+	messages := messagesOfSize(5, 1000)
+	opts := CompactOptions{TriggerTokens: 100, BudgetTokens: 100, ReserveTokens: 50, MinTailMessages: 4}
+	_, plan := Compact("", messages, 10, opts)
+	require.Equal(t, 4, plan.KeptMessages, "a tail smaller than the minimum is never produced")
+	require.Equal(t, 1, plan.DroppedMessages)
+}
+
+func TestCompactMaxTailMessages(t *testing.T) {
+	t.Parallel()
+
+	messages := messagesOfSize(20, 10)
+	opts := CompactOptions{TriggerTokens: 100, BudgetTokens: 10000, ReserveTokens: 1, MaxTailMessages: 5}
+	out, plan := Compact("", messages, 1, opts)
+	require.Len(t, out, 5)
+	require.Equal(t, 15, plan.DroppedMessages)
+}
+
+func TestSummaryNote(t *testing.T) {
+	t.Parallel()
+
+	note := SummaryNote("## brief\nall good", 12, 3)
+	require.Contains(t, note, "## brief")
+	require.Contains(t, note, "12 earlier messages were compacted out")
+	require.Contains(t, note, "3 messages kept verbatim")
+
+	empty := SummaryNote("   ", 4, 0)
+	require.Contains(t, empty, "4 earlier messages")
+	require.NotContains(t, empty, "kept verbatim")
+}
+
+func TestFitToCeilingShrinksToolResults(t *testing.T) {
+	t.Parallel()
+
+	body := strings.Repeat("tool output line\n", 500)
+	messages := []fantasy.Message{
+		toolCall("c1", "bash", `{}`),
+		toolResult("c1", body),
+		userText("next"),
+		userText("next2"),
+	}
+	before := Summarize("", messages).Total()
+	out, report := FitToCeiling("", messages, before/2, DigestOptions{MinTokens: 10}, PointerOptions{})
+	require.True(t, report.Digest.Digested > 0)
+	require.Less(t, report.TokensAfter, report.TokensBefore)
+	require.False(t, report.OverBudget)
+	require.Contains(t, resultTextOf(t, out[1]), "digested")
+}
+
+func TestFitToCeilingDropsOldMessagesLast(t *testing.T) {
+	t.Parallel()
+
+	messages := messagesOfSize(30, 100)
+	report0 := Summarize("", messages).Total()
+	out, report := FitToCeiling("", messages, report0/3, DigestOptions{}, PointerOptions{})
+	require.Positive(t, report.DroppedMessages)
+	require.Equal(t, DroppedAllNote, firstText(out))
+	require.LessOrEqual(t, report.TokensAfter, report.Ceiling+1)
+}
+
+func TestFitToCeilingNoOpWhenWithin(t *testing.T) {
+	t.Parallel()
+
+	messages := messagesOfSize(2, 10)
+	out, report := FitToCeiling("", messages, 100000, DigestOptions{}, PointerOptions{})
+	require.Equal(t, messages, out)
+	require.Equal(t, report.TokensBefore, report.TokensAfter)
+	require.Zero(t, report.DroppedMessages)
+}
+
+func TestFitToCeilingZeroCeilingIsNoOp(t *testing.T) {
+	t.Parallel()
+
+	messages := messagesOfSize(2, 10)
+	out, report := FitToCeiling("", messages, 0, DigestOptions{}, PointerOptions{})
+	require.Equal(t, messages, out)
+	require.Equal(t, report.TokensBefore, report.TokensAfter)
+}
+
+func TestFitToCeilingNeverDropsTheLastTwo(t *testing.T) {
+	t.Parallel()
+
+	messages := messagesOfSize(6, 100)
+	out, report := FitToCeiling("", messages, 1, DigestOptions{}, PointerOptions{})
+	require.Equal(t, 4, report.DroppedMessages)
+	// One note plus the newest two messages.
+	require.Len(t, out, 3)
+	require.Equal(t, messages[5], out[2])
+}
+
+func firstText(messages []fantasy.Message) string {
+	for _, msg := range messages {
+		for _, part := range msg.Content {
+			if text, ok := part.(fantasy.TextPart); ok {
+				return text.Text
+			}
+		}
+	}
+	return ""
+}

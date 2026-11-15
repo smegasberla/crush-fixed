@@ -484,6 +484,187 @@ type Options struct {
 	// is modified: the redirect only applies to processes Crush spawns.
 	PinentryIntegrated   *bool `json:"pinentry_integrated,omitempty" jsonschema:"description=Render GPG passphrase prompts as a native Crush dialog instead of an external pinentry program. Works with file-based keys and security keys and never modifies GPG or git configuration.,default=true"`
 	PinentryCacheTimeout *int  `json:"pinentry_cache_timeout,omitempty" jsonschema:"description=Seconds Crush keeps an entered GPG passphrase in memory so repeated signing operations do not re-prompt. 0 (the default) disables it; gpg-agent's own cache applies regardless.,default=0,example=300"`
+
+	// ContextReduction keeps long sessions answerable by shrinking what is
+	// re-sent every turn instead of trusting the provider's advertised
+	// window. Every knob is optional; nil means the documented default.
+	ContextReduction ContextReductionOptions `json:"context_reduction,omitempty" jsonschema:"description=Context reduction settings (compaction, digesting, pointer stubs\\, learned context ceiling)"`
+}
+
+// ContextReductionOptions configures the context-reduction stack: session
+// compaction, tool-result digesting, read-pointer stubs and the learned
+// context ceiling. All fields are optional; zero or nil values select the
+// defaults documented on each getter.
+type ContextReductionOptions struct {
+	// Enabled turns the whole stack on or off. Nil means enabled.
+	Enabled *bool `json:"enabled,omitempty" jsonschema:"description=Enable context reduction (compaction\\, digesting\\, pointer stubs\\, learned ceiling),default=true"`
+	// CompactionTriggerTokens triggers a rebuilt request (summary plus a
+	// recent tail) once the prompt reaches this many tokens.
+	CompactionTriggerTokens *int `json:"compaction_trigger_tokens,omitempty" jsonschema:"description=Prompt size in tokens that triggers session compaction,default=70000,example=50000"`
+	// CompactionBudgetTokens is the target size of the rebuilt request.
+	CompactionBudgetTokens *int `json:"compaction_budget_tokens,omitempty" jsonschema:"description=Target prompt size in tokens after compaction,default=70000,example=60000"`
+	// CompactionSummaryTokens caps the generated summary.
+	CompactionSummaryTokens *int `json:"compaction_summary_tokens,omitempty" jsonschema:"description=Token budget for the compaction summary,default=2000,example=4000"`
+	// ResponseReserveTokens is held back from the budget so the answer
+	// always fits alongside the prompt.
+	ResponseReserveTokens *int `json:"response_reserve_tokens,omitempty" jsonschema:"description=Tokens reserved for the model answer when sizing a compacted prompt,default=8192,example=16000"`
+	// ToolResultDigestTokens is the size above which an aged tool result
+	// body is replaced by a digest stub.
+	ToolResultDigestTokens *int `json:"tool_result_digest_tokens,omitempty" jsonschema:"description=Tool result size in tokens above which old results are digested,default=1024,example=512"`
+	// ProtectErrors keeps failed tool results verbatim, never digested.
+	ProtectErrors *bool `json:"protect_errors,omitempty" jsonschema:"description=Never digest failed tool results,default=true"`
+	// ReadPointerStubs replaces a re-read of an unchanged file with a
+	// compact pointer instead of the whole body.
+	ReadPointerStubs *bool `json:"read_pointer_stubs,omitempty" jsonschema:"description=Answer a re-read of an unchanged file with a pointer instead of the body,default=true"`
+	// ReadPointerStubTokens is the minimum body size worth stubbing; small
+	// files are always re-sent in full because a pointer would cost more.
+	ReadPointerStubTokens *int `json:"read_pointer_stub_tokens,omitempty" jsonschema:"description=Minimum file body size in tokens before a re-read is answered with a pointer,default=256,example=512"`
+	// LearnedCeiling shrinks the effective context window from real provider
+	// context-overflow errors instead of trusting the advertised window.
+	LearnedCeiling *bool `json:"learned_ceiling,omitempty" jsonschema:"description=Learn a per-model context ceiling from provider overflow errors,default=true"`
+	// CeilingSafetyPercent is the fraction of the advertised window the
+	// prompt may use before the learned ceiling starts trimming.
+	CeilingSafetyPercent *int `json:"ceiling_safety_percent,omitempty" jsonschema:"description=Percent of the advertised context window the prompt may use,default=90,example=85"`
+	// DigestCacheDir is where continuation-brief digests are memoized.
+	// Empty means <data_directory>/digests.
+	DigestCacheDir string `json:"digest_cache_dir,omitempty" jsonschema:"description=Directory for memoized conversation digests (default inside the data directory)"`
+}
+
+// Defaults for the context-reduction stack. They are the values measured to
+// work on real sessions; raising them trades prompt cost for recall.
+const (
+	DefaultCompactionTriggerTokens = 70000
+	DefaultCompactionBudgetTokens  = 70000
+	DefaultCompactionSummaryTokens = 2000
+	DefaultResponseReserveTokens   = 8192
+	DefaultToolResultDigestTokens  = 1024
+	DefaultReadPointerStubTokens   = 256
+	DefaultCeilingSafetyPercent    = 90
+)
+
+// GetContextReduction returns the context-reduction settings, never nil.
+func (o *Options) GetContextReduction() *ContextReductionOptions {
+	if o == nil {
+		return &ContextReductionOptions{}
+	}
+	return &o.ContextReduction
+}
+
+func boolOr(v *bool, fallback bool) bool {
+	if v == nil {
+		return fallback
+	}
+	return *v
+}
+
+func positiveIntOr(v *int, fallback int) int {
+	if v == nil || *v <= 0 {
+		return fallback
+	}
+	return *v
+}
+
+// ContextReductionEnabled reports whether the stack runs at all.
+func (c *ContextReductionOptions) ContextReductionEnabled() bool {
+	if c == nil {
+		return true
+	}
+	return boolOr(c.Enabled, true)
+}
+
+// GetCompactionTriggerTokens returns the prompt size that triggers compaction.
+func (c *ContextReductionOptions) GetCompactionTriggerTokens() int {
+	if c == nil {
+		return DefaultCompactionTriggerTokens
+	}
+	return positiveIntOr(c.CompactionTriggerTokens, DefaultCompactionTriggerTokens)
+}
+
+// GetCompactionBudgetTokens returns the target size of a compacted prompt.
+func (c *ContextReductionOptions) GetCompactionBudgetTokens() int {
+	if c == nil {
+		return DefaultCompactionBudgetTokens
+	}
+	return positiveIntOr(c.CompactionBudgetTokens, DefaultCompactionBudgetTokens)
+}
+
+// GetCompactionSummaryTokens returns the summary size cap.
+func (c *ContextReductionOptions) GetCompactionSummaryTokens() int {
+	if c == nil {
+		return DefaultCompactionSummaryTokens
+	}
+	return positiveIntOr(c.CompactionSummaryTokens, DefaultCompactionSummaryTokens)
+}
+
+// GetResponseReserveTokens returns the tokens held back for the answer.
+func (c *ContextReductionOptions) GetResponseReserveTokens() int {
+	if c == nil {
+		return DefaultResponseReserveTokens
+	}
+	return positiveIntOr(c.ResponseReserveTokens, DefaultResponseReserveTokens)
+}
+
+// GetToolResultDigestTokens returns the size above which aged tool results are
+// digested.
+func (c *ContextReductionOptions) GetToolResultDigestTokens() int {
+	if c == nil {
+		return DefaultToolResultDigestTokens
+	}
+	return positiveIntOr(c.ToolResultDigestTokens, DefaultToolResultDigestTokens)
+}
+
+// GetProtectErrors reports whether failed tool results are kept verbatim.
+func (c *ContextReductionOptions) GetProtectErrors() bool {
+	if c == nil {
+		return true
+	}
+	return boolOr(c.ProtectErrors, true)
+}
+
+// GetReadPointerStubs reports whether re-reads may be answered with a pointer.
+func (c *ContextReductionOptions) GetReadPointerStubs() bool {
+	if c == nil {
+		return true
+	}
+	return boolOr(c.ReadPointerStubs, true)
+}
+
+// GetReadPointerStubTokens returns the minimum body size worth a pointer.
+func (c *ContextReductionOptions) GetReadPointerStubTokens() int {
+	if c == nil {
+		return DefaultReadPointerStubTokens
+	}
+	return positiveIntOr(c.ReadPointerStubTokens, DefaultReadPointerStubTokens)
+}
+
+// GetLearnedCeiling reports whether the ceiling adapts to provider overflows.
+func (c *ContextReductionOptions) GetLearnedCeiling() bool {
+	if c == nil {
+		return true
+	}
+	return boolOr(c.LearnedCeiling, true)
+}
+
+// GetCeilingSafetyPercent returns the percentage of the advertised window the
+// prompt may use before it is trimmed.
+func (c *ContextReductionOptions) GetCeilingSafetyPercent() int {
+	if c == nil {
+		return DefaultCeilingSafetyPercent
+	}
+	pct := positiveIntOr(c.CeilingSafetyPercent, DefaultCeilingSafetyPercent)
+	if pct > 100 {
+		return 100
+	}
+	return pct
+}
+
+// GetDigestCacheDir returns the configured digest cache directory, or "" when
+// the caller should derive it from the data directory.
+func (c *ContextReductionOptions) GetDigestCacheDir() string {
+	if c == nil {
+		return ""
+	}
+	return c.DigestCacheDir
 }
 
 // DefaultMaxBackgroundJobs is how many background shell jobs may run at once

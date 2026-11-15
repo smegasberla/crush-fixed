@@ -154,6 +154,11 @@ type coordinator struct {
 	runComplete pubsub.Publisher[notify.RunComplete]
 	interactive bool
 
+	// readMemo lets view answer a repeated read of an unchanged range with a
+	// pointer instead of the body. Shared by every agent so a subagent sees
+	// what the main agent already read.
+	readMemo *tools.ReadMemo
+
 	// agentMu guards mainAgent and mainAgentName: SetMainAgent runs on
 	// HTTP handler goroutines while runs, cancels, and probes read the
 	// current agent from their own goroutines.
@@ -269,6 +274,7 @@ func NewCoordinator(ctx context.Context, opts CoordinatorOptions) (Coordinator, 
 		hookRunner:      opts.HookRunner,
 		dispatched:      csync.NewMap[string, *dispatchedAgent](),
 		backgroundAfter: subAgentBackgroundAfter,
+		readMemo:        tools.NewReadMemo(),
 	}
 
 	agentCfg, ok := opts.Config.Config().Agents[config.AgentCoder]
@@ -998,6 +1004,7 @@ func (c *coordinator) buildAgentWithModels(ctx context.Context, ready *errgroup.
 		Tools:                nil,
 		Notify:               c.notify,
 		RunComplete:          c.runComplete,
+		Reduction:            c.reductionOptions(large),
 		Hooks:                c.hookRunner,
 		titles:               &c.titles,
 	})
@@ -1124,7 +1131,7 @@ func (c *coordinator) buildTools(ctx context.Context, agent config.Agent, isSubA
 		tools.NewLsTool(c.permissions, c.cfg.WorkingDir(), c.cfg.Config().Tools.Ls),
 		tools.NewSourcegraphTool(nil),
 		tools.NewTodosTool(c.sessions),
-		tools.NewViewTool(c.lspManager, c.permissions, c.filetracker, c.skillTracker, c.cfg.WorkingDir(), c.cfg.Config().Options.SkillsPaths...),
+		tools.NewViewToolWithMemo(c.readMemo, c.lspManager, c.permissions, c.filetracker, c.skillTracker, c.cfg.WorkingDir(), c.cfg.Config().Options.SkillsPaths...),
 		tools.NewWriteTool(c.lspManager, c.permissions, c.history, c.filetracker, c.cfg.WorkingDir()),
 	)
 
