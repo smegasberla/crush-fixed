@@ -295,31 +295,100 @@ func DiscoverWithStates(paths []string) ([]*Skill, []*SkillState) {
 	return skills, states
 }
 
-// ToPromptXML generates XML for injection into the system prompt.
+// MaxIndexedSkills is how many skills the prompt index describes in full. The
+// rest are listed by name only, with a pointer to the loader tool.
+//
+// The index is paid for on every request of every turn, so it is bounded on
+// purpose: an installation with several hundred skills would otherwise spend tens
+// of thousands of tokens per request describing tools the turn will never open. A
+// bounded index with a way to enumerate the rest keeps every skill reachable
+// without paying for all of them up front.
+const MaxIndexedSkills = 48
+
+// ToPromptXML generates the skills index injected into the system prompt.
 // Skills with DisableModelInvocation set to true are excluded.
+//
+// Each entry carries only what the trigger needs: the name, a short description,
+// and the location to open. The skill body is never here; the model loads it with
+// the skills tool when the trigger matches.
 func ToPromptXML(skills []*Skill) string {
 	if len(skills) == 0 {
 		return ""
 	}
 
-	var sb strings.Builder
-	sb.WriteString("<available_skills>\n")
+	loadable := make([]*Skill, 0, len(skills))
 	for _, s := range skills {
-		// Skip skills that have disable-model-invocation set
 		if s.DisableModelInvocation {
 			continue
 		}
-		sb.WriteString("  <skill>\n")
-		fmt.Fprintf(&sb, "    <name>%s</name>\n", escape(s.Name))
-		fmt.Fprintf(&sb, "    <description>%s</description>\n", escape(s.Description))
-		fmt.Fprintf(&sb, "    <location>%s</location>\n", escape(s.SkillFilePath))
-		if s.Builtin {
-			sb.WriteString("    <type>builtin</type>\n")
+		loadable = append(loadable, s)
+	}
+	if len(loadable) == 0 {
+		return ""
+	}
+
+	var sb strings.Builder
+	sb.WriteString("<available_skills>\n")
+	sb.WriteString("Each described line is `name | description`; load a matching skill by name before using it. The description is only a trigger: the procedure lives in the skill itself.\n")
+
+	described := loadable
+	if len(described) > MaxIndexedSkills {
+		described = described[:MaxIndexedSkills]
+	}
+	for _, s := range described {
+		// The location is deliberately omitted: the loader resolves a skill
+		// by name, so printing a path per skill would be paid for on every
+		// request to say something the model never needs.
+		fmt.Fprintf(&sb, "- %s | %s\n",
+			escape(s.Name),
+			escape(shortDescription(s.Description)),
+		)
+	}
+	if remaining := len(loadable) - len(described); remaining > 0 {
+		names := make([]string, 0, remaining)
+		for _, s := range loadable[len(described):] {
+			names = append(names, s.Name)
 		}
-		sb.WriteString("  </skill>\n")
+		fmt.Fprintf(&sb, "\n%d more skills are installed and not described here: %s\n",
+			remaining, escape(strings.Join(names, ", ")))
+		sb.WriteString("Load any of them by name, or list every skill with its description, using the skills tool.\n")
 	}
 	sb.WriteString("</available_skills>")
 	return sb.String()
+}
+
+// maxPromptDescriptionRunes bounds the description carried in the index. It is
+// wide enough for one useful sentence and short enough that the bounded index
+// stays cheap.
+const maxPromptDescriptionRunes = 110
+
+// shortDescription returns the first sentence of a description, capped. The point
+// of the entry is a trigger ("does this apply?"), and the full text lives in the
+// skill file the model opens.
+func shortDescription(description string) string {
+	collapsed := strings.Join(strings.Fields(description), " ")
+	if collapsed == "" {
+		return ""
+	}
+	// Cut at the first sentence boundary, so the index carries the trigger
+	// rather than the documentation.
+	for i, r := range collapsed {
+		if r != '.' && r != '?' && r != '!' {
+			continue
+		}
+		if i+1 >= len(collapsed) {
+			break
+		}
+		if i >= 20 {
+			collapsed = collapsed[:i+1]
+			break
+		}
+	}
+	runes := []rune(collapsed)
+	if len(runes) <= maxPromptDescriptionRunes {
+		return collapsed
+	}
+	return strings.TrimRight(string(runes[:maxPromptDescriptionRunes]), " ,;:-") + "…"
 }
 
 // FormatInvocation generates XML for a skill when invoked as a user command.

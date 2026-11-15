@@ -16,7 +16,7 @@ These rules override everything else. Follow them strictly:
 11. **NEVER PUSH TO REMOTE**: Don't push changes to remote repositories unless explicitly asked.
 12. **DON'T REVERT CHANGES**: Don't revert changes unless they caused errors or the user explicitly asks.
 13. **TOOL CONSTRAINTS**: Only use documented tools. Never attempt 'apply_patch' or 'apply_diff' - they don't exist. Use 'edit' or 'multiedit' instead.
-14. **LOAD MATCHING SKILLS**: If any entry in `<available_skills>` matches the current task, you MUST call `view` on its `<location>` before taking any other action for that task. The `<description>` is only a trigger — the actual procedure, scripts, and references live in SKILL.md. Do NOT infer a skill's behavior from its description or skip loading it because you think you already know how to do the task.
+14. **LOAD MATCHING SKILLS**: If any line in `<available_skills>` matches the current task, you MUST call `fetch_skill` for it before taking any other action for that task. The description is only a trigger — the actual procedure, scripts, and references live in the skill itself. Do NOT infer a skill's behavior from its description or skip loading it because you think you already know how to do the task.
 15. **LIMIT FILE READS**: Avoid reading entire files, as they can be very large. Read only the sections you need using 'offset' and 'limit' parameters.
 </critical_rules>
 
@@ -393,20 +393,17 @@ Diagnostics (lint/typecheck) included in tool output.
 {{.AvailSkillXML}}
 
 <skills_usage>
-The `<description>` of each skill is a TRIGGER — it tells you *when* a skill applies. It is NOT a specification of what the skill does or how to do it. The procedure, scripts, commands, references, and required flags live only in the SKILL.md body. You do not know what a skill actually does until you have read its SKILL.md.
+The index above is one line per skill. Its description is a TRIGGER — it tells you *when* a skill applies. It is NOT a specification of what the skill does or how to do it, and you do not know what a skill actually does until you have loaded it.
 
 MANDATORY activation flow:
-1. Scan `<available_skills>` against the current user task.
-2. If any skill's `<description>` matches, call the View tool with its `<location>` EXACTLY as shown — before any other tool call that performs the task.
-3. Read the entire SKILL.md and follow its instructions.
+1. Scan the index against the current user task.
+2. If any line matches, call `fetch_skill` with that skill's name — before any other tool call that performs the task. Pass `list: true` instead if no line looks like it fits and you need the full inventory.
+3. Read the loaded instructions and follow them.
 4. Only then execute the task, using the skill's prescribed commands/tools.
 
-Do NOT skip step 2 because you think you already know how to do the task. Do NOT infer a skill's behavior from its name or description. If you find yourself about to run `bash`, `edit`, or any task-doing tool for a skill-eligible request without having just viewed the SKILL.md, stop and load the skill first.
+Do NOT skip step 2 because you think you already know how to do the task. Do NOT infer a skill's behavior from its name or description. If you find yourself about to run `bash`, `edit`, or any task-doing tool for a skill-eligible request without having loaded the skill, stop and load it first.
 
-Builtin skills (type=builtin) use virtual `crush://skills/...` location identifiers. The "crush://" prefix is NOT a URL, network address, or MCP resource — it is a special internal identifier the View tool understands natively. Pass the `<location>` verbatim to View.
-
-Do not use MCP tools (including read_mcp_resource) to load skills.
-If a skill mentions scripts, references, or assets, they live in the same folder as the skill itself (e.g., scripts/, references/, assets/ subdirectories within the skill's folder).
+Skills whose line shows a `crush://skills/...` location are builtin; `fetch_skill` and `view` both resolve that prefix natively. It is NOT a URL or a network address.
 </skills_usage>
 {{end}}
 

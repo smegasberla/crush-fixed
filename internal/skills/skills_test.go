@@ -1,6 +1,7 @@
 package skills
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -307,9 +308,47 @@ func TestToPromptXML(t *testing.T) {
 	xml := ToPromptXML(skills)
 
 	require.Contains(t, xml, "<available_skills>")
-	require.Contains(t, xml, "<name>pdf-processing</name>")
-	require.Contains(t, xml, "<description>Extracts text from PDFs.</description>")
+	require.Contains(t, xml, "- pdf-processing | Extracts text from PDFs.")
 	require.Contains(t, xml, "&amp;") // XML escaping
+	require.NotContains(t, xml, "<name>", "the index is one line per skill, not an element per field")
+}
+
+func TestToPromptXMLIsBoundedAndPointsAtTheRest(t *testing.T) {
+	t.Parallel()
+
+	many := make([]*Skill, 0, MaxIndexedSkills+5)
+	for i := range MaxIndexedSkills + 5 {
+		name := fmt.Sprintf("skill-%03d", i)
+		many = append(many, &Skill{Name: name, Description: "Does a thing.", SkillFilePath: "/s/" + name})
+	}
+
+	xml := ToPromptXML(many)
+
+	// Exactly the bounded number of skills are described.
+	described := strings.Count(xml, " | Does a thing.")
+	require.Equal(t, MaxIndexedSkills, described)
+
+	// The rest are named, so nothing becomes unreachable.
+	require.Contains(t, xml, "5 more skills are installed")
+	require.Contains(t, xml, "skill-052", "unnamed skills are still listed by name")
+	require.Contains(t, xml, "by name")
+}
+
+func TestToPromptXMLOmitsLocations(t *testing.T) {
+	t.Parallel()
+
+	skills := []*Skill{{Name: "one", Description: "d.", SkillFilePath: "/a/very/long/path/SKILL.md"}}
+	xml := ToPromptXML(skills)
+	require.NotContains(t, xml, "/a/very/long/path", "the loader resolves by name, so a path per skill is wasted bytes")
+}
+
+func TestToPromptXMLShortensDescriptions(t *testing.T) {
+	t.Parallel()
+
+	long := strings.Repeat("word ", 200)
+	xml := ToPromptXML([]*Skill{{Name: "x", Description: long}})
+	require.Contains(t, xml, "…")
+	require.Less(t, len(xml), len(long))
 }
 
 func TestToPromptXMLDisableModelInvocation(t *testing.T) {
@@ -322,14 +361,40 @@ func TestToPromptXMLDisableModelInvocation(t *testing.T) {
 
 	xml := ToPromptXML(skills)
 
-	require.Contains(t, xml, "<name>visible-skill</name>")
-	require.NotContains(t, xml, "<name>hidden-skill</name>")
+	require.Contains(t, xml, "visible-skill")
+	require.NotContains(t, xml, "hidden-skill")
 }
 
 func TestToPromptXMLEmpty(t *testing.T) {
 	t.Parallel()
 	require.Empty(t, ToPromptXML(nil))
 	require.Empty(t, ToPromptXML([]*Skill{}))
+
+	// A list where every skill is hidden produces no block at all.
+	hidden := []*Skill{{Name: "h", DisableModelInvocation: true}}
+	require.Empty(t, ToPromptXML(hidden))
+}
+
+func TestShortDescription(t *testing.T) {
+	t.Parallel()
+
+	require.Empty(t, shortDescription(""))
+	require.Empty(t, shortDescription("   "))
+
+	// The first sentence is kept when it is long enough to identify the skill.
+	require.Equal(t, "Extracts text from PDFs.", shortDescription("Extracts text from PDFs. Also does more."))
+	// A second sentence is documentation, not a trigger, so it is cut once the
+	// first sentence is long enough to identify the skill.
+	require.Equal(t, "Use when building the release binaries.",
+		shortDescription("Use when building the release binaries. Also covers signing."))
+
+	// Whitespace collapses so one entry stays one line.
+	require.Equal(t, "use spaced", shortDescription("use   spaced"))
+	require.NotContains(t, shortDescription("a\nb\tc"), "\n")
+
+	// A description with no early sentence is capped.
+	capped := shortDescription(strings.Repeat("x", 500))
+	require.LessOrEqual(t, len([]rune(capped)), maxPromptDescriptionRunes+1)
 }
 
 func TestEscape(t *testing.T) {
@@ -358,18 +423,6 @@ func TestEscape(t *testing.T) {
 			require.Equal(t, tt.want, escape(tt.in))
 		})
 	}
-}
-
-func TestToPromptXMLBuiltinType(t *testing.T) {
-	t.Parallel()
-
-	skills := []*Skill{
-		{Name: "builtin-skill", Description: "A builtin.", SkillFilePath: "crush://skills/builtin-skill/SKILL.md", Builtin: true},
-		{Name: "user-skill", Description: "A user skill.", SkillFilePath: "/home/user/.config/crush/skills/user-skill/SKILL.md"},
-	}
-	xml := ToPromptXML(skills)
-	require.Contains(t, xml, "<type>builtin</type>")
-	require.Equal(t, 1, strings.Count(xml, "<type>builtin</type>"))
 }
 
 func TestParseContent(t *testing.T) {
