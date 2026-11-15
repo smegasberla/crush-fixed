@@ -21,6 +21,47 @@
 - **Works Everywhere:** first-class support in every terminal on macOS, Linux, Windows (PowerShell and WSL), Android, FreeBSD, OpenBSD, and NetBSD
 - **Industrial Grade:** built on the Charm ecosystem, powering 25k+ applications, from leading open source projects to business-critical infrastructure
 
+## What changed in this build
+
+Upstream Crush answers well but pays for it on every request. This build spends
+less: on the tokens a request carries, on the work done before it is sent, and on
+the round trips a turn needs to finish.
+
+Measured on this machine, against the same model and the same sessions:
+
+| | before | after |
+|---|---|---|
+| System prompt per request | 39 444 tokens | **6 941 tokens** (−82 %) |
+| Installed skills listed in full | 31 269 tokens | 2 600 tokens |
+| Stale tool output re-sent (1.2M-token transcript) | 1 200 000 tokens | **201 000 tokens**, nothing dropped |
+| Realistic 30-round session, 260k window | 95 000 tokens | **61 000 tokens** (−35 % per request) |
+| Compaction trigger | 20k below the window | 70k tokens, configurable |
+| Tool payload per request | 4 447 tokens | 3 631 tokens |
+
+Also changed:
+
+- **Provider connections are pooled.** The default HTTP transport keeps two idle
+  connections per host; an agent needs more, so requests were re-dialling and
+  paying a TLS handshake. Every provider now shares one pool sized for an agent.
+- **Tool results no longer wait on the language server.** An edit used to block up
+  to 5 s for diagnostics and a file read 300 ms; both are now sub-second and
+  adaptive.
+- **Conversation compaction runs at the configured threshold**, not when the
+  window is nearly full, and old tool output is digested every round rather than
+  only at the ceiling.
+- **Edits are transactional:** one snapshot, `expect`-guarded line addresses, a
+  read-back hash of what landed, preserved line endings and final newline, and a
+  per-turn journal you can revert.
+- **No attribution is written.** Commits, issues and pull requests carry no
+  "Generated with" line and no co-author trailer.
+- Long sessions keep a project memory, a plan whose steps need evidence to close,
+  and unfinished work offered back at startup.
+
+Everything above is configurable under `options` in `crush.json`/`crushrc`
+(`context_reduction`, `governance`, `edit_safety`, `speed`, `leverage`), and every
+default is the measured one. Sessions, config and project state keep the same
+format: switching between this build and upstream reads the same files.
+
 ## Installation
 
 Use a package manager:
