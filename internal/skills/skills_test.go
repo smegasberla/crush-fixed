@@ -328,10 +328,11 @@ func TestToPromptXMLIsBoundedAndPointsAtTheRest(t *testing.T) {
 	described := strings.Count(xml, " | Does a thing.")
 	require.Equal(t, MaxIndexedSkills, described)
 
-	// The rest are named, so nothing becomes unreachable.
+	// The rest stay reachable without being spelled out: the index carries a
+	// count and names the on-demand listing instead.
 	require.Contains(t, xml, fmt.Sprintf("%d more skills are installed", len(many)-MaxIndexedSkills))
-	require.Contains(t, xml, fmt.Sprintf("skill-%03d", MaxIndexedSkills), "unnamed skills are still listed by name")
-	require.Contains(t, xml, "by name")
+	require.NotContains(t, xml, fmt.Sprintf("skill-%03d", MaxIndexedSkills), "unnamed skills must not be dumped into every request")
+	require.Contains(t, xml, "list: true", "the index points at the way to enumerate the rest")
 }
 
 func TestToPromptXMLOmitsLocations(t *testing.T) {

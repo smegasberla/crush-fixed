@@ -296,7 +296,7 @@ func DiscoverWithStates(paths []string) ([]*Skill, []*SkillState) {
 }
 
 // MaxIndexedSkills is how many skills the prompt index describes in full. The
-// rest are listed by name only, with a pointer to the loader tool.
+// rest are reduced to a count and a pointer to the loader tool.
 //
 // The index is paid for on every request of every turn, so it is bounded on
 // purpose: an installation with several hundred skills would otherwise spend tens
@@ -345,13 +345,13 @@ func ToPromptXML(skills []*Skill) string {
 		)
 	}
 	if remaining := len(loadable) - len(described); remaining > 0 {
-		names := make([]string, 0, remaining)
-		for _, s := range loadable[len(described):] {
-			names = append(names, s.Name)
-		}
-		fmt.Fprintf(&sb, "\n%d more skills are installed and not described here: %s\n",
-			remaining, escape(strings.Join(names, ", ")))
-		sb.WriteString("Load any of them by name, or list every skill with its description, using the skills tool.\n")
+		// The names are deliberately not dumped here. An installation with
+		// several hundred skills would spend thousands of bytes per request
+		// listing names the turn will not use, and the loader can enumerate
+		// them on demand for one call. A count plus the way to ask for more
+		// keeps every skill reachable at a fixed cost.
+		fmt.Fprintf(&sb, "\n%d more skills are installed and not described here.\n", remaining)
+		sb.WriteString("Call `fetch_skill` with `list: true` for every installed skill with its description, then load one by name.\n")
 	}
 	sb.WriteString("</available_skills>")
 	return sb.String()
