@@ -225,3 +225,82 @@ func TestKeanu_BodyTextContrast(t *testing.T) {
 		t.Errorf("keanu body text contrast %.2f is below WCAG AA (%.1f)", ratio, minAA)
 	}
 }
+
+// TestReadableThemes tests the themes added after the original three. Each has
+// no established look to preserve, so it must be legible from the start: body
+// text, inline code, the H1 chip and every badge the shared styles build.
+func TestReadableThemes(t *testing.T) {
+	t.Parallel()
+
+	const minAA = 4.5
+	added := []string{"abyss", "claude", "ember", "github", "nocturne", "papercut", "sakura", "tundra"}
+
+	for _, name := range added {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			s, err := LoadTheme(name)
+			if err != nil {
+				t.Fatalf("load: %v", err)
+			}
+			o := builtinThemes[name]()
+
+			if got := wcagContrast(o.fgBase, o.bgBase); got < minAA {
+				t.Errorf("body text contrast %.2f is below WCAG AA (%.1f)", got, minAA)
+			}
+
+			code := s.Markdown.Code
+			if code.Color == nil || code.BackgroundColor == nil {
+				t.Fatal("inline code style is missing fg/bg colors")
+			}
+			if got := wcagContrast(lipgloss.Color(*code.Color), lipgloss.Color(*code.BackgroundColor)); got < minAA {
+				t.Errorf("inline code contrast %.2f is below WCAG AA (%.1f)", got, minAA)
+			}
+
+			// The code chip has to differ from the page, or it is not a chip.
+			if *code.BackgroundColor == rgbHex(o.bgBase) {
+				t.Error("inline code background matches the page background")
+			}
+
+			for label, pair := range primaryBadgesOf(s) {
+				if pair[0] == nil || pair[1] == nil {
+					continue
+				}
+				got := wcagContrast(pair[0], pair[1])
+				if got < minBadgeInkContrast {
+					t.Errorf("%s contrast %.2f is below %.1f (%s on %s)",
+						label, got, minBadgeInkContrast, rgbHex(pair[0]), rgbHex(pair[1]))
+				}
+			}
+
+			for _, b := range badgesOf(s, o) {
+				got := wcagContrast(b.style.GetForeground(), b.fill)
+				if got < minBadgeInkContrast {
+					t.Errorf("%s contrast %.2f is below %.1f (%s on %s)",
+						b.name, got, minBadgeInkContrast,
+						rgbHex(b.style.GetForeground()), rgbHex(b.fill))
+				}
+			}
+		})
+	}
+}
+
+// TestAddedThemesAreComplete guards the palette contract: a token left unset
+// falls back to nil, which quickStyle renders as the terminal default rather
+// than as part of the theme.
+func TestAddedThemesAreComplete(t *testing.T) {
+	t.Parallel()
+
+	for name, opts := range builtinThemes {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			o := opts()
+			o.deriveDiffColors()
+			for _, f := range PaletteFields() {
+				if f.Get(PaletteFromOpts(o)) == "" {
+					t.Errorf("%s leaves %s unset", name, f.Name)
+				}
+			}
+		})
+	}
+}

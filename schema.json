@@ -1316,7 +1316,11 @@
           "examples": [
             "charmtone-panther",
             "gruvbox-dark",
-            "keanu"
+            "keanu",
+            "claude",
+            "github",
+            "nocturne",
+            "papercut"
           ]
         },
         "completions": {

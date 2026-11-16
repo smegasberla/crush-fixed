@@ -3,6 +3,7 @@ package styles
 import (
 	"fmt"
 	"image/color"
+	"slices"
 	"testing"
 
 	"charm.land/glamour/v2/ansi"
@@ -46,18 +47,48 @@ func badgesOf(s Styles, o quickStyleOpts) []badge {
 	}
 }
 
-// TestBadgeInk_BuiltinsKeepTheirInk pins the built-in themes' look: each
-// keeps the background role it always wrote on its badges.
+// legacyThemes are the built-in themes whose look predates legible badge ink:
+// they keep the background role they always wrote, even where it is hard to
+// read. Themes added since then pick ink that reads instead.
+var legacyThemes = []string{"charmtone-panther", "gruvbox-dark", "keanu"}
+
+// TestBadgeInk_BuiltinsKeepTheirInk pins those themes' look: each keeps the
+// background role it always wrote on its badges.
 func TestBadgeInk_BuiltinsKeepTheirInk(t *testing.T) {
 	t.Parallel()
-	for name, opts := range builtinThemes {
-		o := opts()
+	for _, name := range legacyThemes {
+		o := builtinThemes[name]()
 		s := quickStyle(o)
 		for _, b := range badgesOf(s, o) {
 			require.Equal(t, rgbHex(b.ink), rgbHex(b.style.GetForeground()), "%s: %s", name, b.name)
 		}
 	}
 }
+
+// TestBadgeInk_EveryBuiltinReads checks that no shipped theme renders a badge
+// in text that disappears into its fill. The legacy themes are held to the
+// original look above; every theme, legacy included except where pinned, must
+// still clear the 3:1 floor where it can.
+func TestBadgeInk_EveryBuiltinReads(t *testing.T) {
+	t.Parallel()
+	for name := range builtinThemes {
+		s, err := LoadTheme(name)
+		require.NoError(t, err)
+		o := builtinThemes[name]()
+		for _, b := range badgesOf(s, o) {
+			got := wcagContrast(b.style.GetForeground(), b.fill)
+			if slices.Contains(legacyThemes, name) && slices.Contains(legacyBadBadges, name+":"+b.name) {
+				continue
+			}
+			require.GreaterOrEqual(t, got, minBadgeInkContrast, "%s: %s is %s on %s",
+				name, b.name, rgbHex(b.style.GetForeground()), rgbHex(b.fill))
+		}
+	}
+}
+
+// legacyBadBadges lists the legacy theme badges that were already below the
+// floor and are pinned by the look test above.
+var legacyBadBadges = []string{"gruvbox-dark:Status.WarnIndicator"}
 
 // TestBadgeInk_LightTheme checks the badges stay legible on a light theme,
 // where the background roles they write by default are light too.

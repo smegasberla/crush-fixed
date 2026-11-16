@@ -207,6 +207,22 @@ fork.
   or global.
 - MCP, LSP, skills, hooks, themes: unchanged.
 
+### Themes
+
+Beyond the three upstream themes (`charmtone-panther`, `gruvbox-dark`, `keanu`)
+this fork ships nine more, selectable with `active_theme` or the theme switcher:
+
+| Dark | | Light | |
+|---|---|---|---|
+| `claude` | warm paper and terracotta | `papercut` | black ink on warm paper stock |
+| `github` | flat GitHub near-black and blue | `tundra` | cold daylight, slate and steel |
+| `abyss` | deep water and bioluminescence | `sakura` | blossom-pink paper and plum ink |
+| `ember` | charcoal and the last of a fire | | |
+| `nocturne` | indigo room, one gold lamp | | |
+
+The light palettes re-ink their badges and inline code instead of inheriting the
+dark defaults, so they stay readable rather than turning into bright-on-bright.
+
 ## Differences at a glance
 
 | | upstream Crush | this fork |

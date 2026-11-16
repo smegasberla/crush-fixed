@@ -376,6 +376,20 @@ var builtinThemes = map[string]func() quickStyleOpts{
 	"charmtone-panther": charmtoneOpts,
 	"gruvbox-dark":      gruvboxDarkOpts,
 	"keanu":             keanuOpts,
+
+	// Borrowed identities.
+	"claude": claudeOpts,
+	"github": githubOpts,
+
+	// Original dark palettes.
+	"abyss":    abyssOpts,
+	"ember":    emberOpts,
+	"nocturne": nocturneOpts,
+
+	// Original light palettes.
+	"papercut": papercutOpts,
+	"sakura":   sakuraOpts,
+	"tundra":   tundraOpts,
 }
 
 // builtinThemeOverrides maps theme names to functions that apply
@@ -385,6 +399,19 @@ var builtinThemeOverrides = map[string]func(Styles) Styles{
 	"charmtone-panther": charmtoneOverrides,
 	"gruvbox-dark":      gruvboxDarkOverrides,
 	"keanu":             keanuOverrides,
+
+	// Themes added later have no established look to preserve, so they pick
+	// badge ink that reads instead of inheriting the dark defaults.
+	"abyss":    abyssOverrides,
+	"claude":   claudeOverrides,
+	"ember":    emberOverrides,
+	"github":   githubOverrides,
+	"nocturne": nocturneOverrides,
+
+	// A light palette also needs its inline code chip re-inked.
+	"papercut": papercutOverrides,
+	"sakura":   sakuraOverrides,
+	"tundra":   tundraOverrides,
 }
 
 // deprecatedThemeNames maps legacy built-in theme names to their current
