@@ -1497,6 +1497,11 @@ func (m *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if cmd := m.handleAnimTick(msg); cmd != nil {
 			cmds = append(cmds, cmd)
 		}
+	case statusTimerTickMsg:
+		if m.status != nil && m.status.HandleTimerTick(msg) {
+			// The elapsed second changed, so the memoized frame is stale.
+			m.invalidateFrames()
+		}
 	case scrollbarHideMsg:
 		if m.state == uiChat {
 			m.chat.HideScrollbar(msg.seq)
@@ -1736,6 +1741,14 @@ func (m *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// then jumped several frames whenever an unrelated message happened to
 	// force a repaint.
 	m.subAgentsRunning = m.runningSubAgents()
+	// The elapsed timer lives outside the transcript, so it needs its own
+	// repaint clock: the shared one stops as soon as no spinner is visible.
+	if m.status != nil {
+		m.status.SetSession(m.currentSessionID())
+		if cmd := m.status.UpdateTimer(); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+	}
 	if m.state == uiChat {
 		m.chat.SetExternalAnimation(m.subAgentsRunning > 0)
 		if cmd := m.chat.EnsureAnimating(); cmd != nil {
@@ -3893,6 +3906,7 @@ func (m *UI) Draw(scr uv.Screen, area uv.Rectangle) *tea.Cursor {
 	// Add status and help layer
 	m.status.SetHideHelp(isOnboarding)
 	m.status.SetMode(m.mode, m.permModeCached())
+	m.status.SetSession(m.currentSessionID())
 	m.status.Draw(scr, layout.status)
 
 	// Draw completions popup if open

@@ -21,6 +21,22 @@ const DefaultStatusTTL = 5 * time.Second
 // and the mode badge.
 const badgeLeftInset = 1
 
+// statusTimerGap is the number of blank cells kept between the shortcut
+// hints and the elapsed timer, so the two read as separate things.
+const statusTimerGap = 2
+
+// statusTimerInterval is how often the elapsed timer repaints. The value only
+// changes once a second, and the shared animation clock stops as soon as no
+// spinner is visible, so the timer needs a clock of its own at that rate.
+const statusTimerInterval = time.Second
+
+// statusTimerTickMsg asks for one elapsed-timer repaint.
+type statusTimerTickMsg struct {
+	// gen retires ticks from a clock that was replaced, so stopping and
+	// restarting the timer cannot leave two clocks running.
+	gen uint64
+}
+
 // Status is the status bar and help model.
 type Status struct {
 	com      *common.Common
@@ -36,6 +52,14 @@ type Status struct {
 	// hints.
 	inputMode uiInputMode
 	permMode  permission.PermissionMode
+
+	// sessionID selects the turn clock the elapsed timer reads.
+	sessionID string
+
+	// timerRunning is true while a repaint is scheduled, and timerGen
+	// identifies that clock so a stale tick cannot extend it.
+	timerRunning bool
+	timerGen     uint64
 }
 
 // NewStatus creates a new status bar and help model.
@@ -74,6 +98,62 @@ func (s *Status) ClearInfoMsg(seq uint64) {
 func (s *Status) SetMode(mode uiInputMode, permMode permission.PermissionMode) {
 	s.inputMode = mode
 	s.permMode = permMode
+}
+
+// SetSession sets the session whose turn clock the elapsed timer reads.
+func (s *Status) SetSession(sessionID string) {
+	s.sessionID = sessionID
+}
+
+// elapsedView renders the running turn's elapsed time, or an empty string
+// when no turn is running in this session. The duration itself is bolded and
+// colored so it is readable at a glance from the right edge of the row.
+func (s *Status) elapsedView() string {
+	elapsed := common.Elapsed(s.sessionID)
+	if elapsed == "" {
+		return ""
+	}
+	t := s.com.Styles
+	return t.Status.TimerLabel.Render("worked for ") + t.Status.Timer.Render(elapsed)
+}
+
+// UpdateTimer arms the elapsed timer's repaint clock, or retires it when no
+// turn is running in this session. It is the only place the clock is armed,
+// so it is cheap to call from the update tail on every message.
+func (s *Status) UpdateTimer() tea.Cmd {
+	if common.Elapsed(s.sessionID) == "" {
+		s.timerRunning = false
+		return nil
+	}
+	return s.armTimer()
+}
+
+// armTimer schedules the next repaint.
+func (s *Status) armTimer() tea.Cmd {
+	if s.timerRunning {
+		return nil
+	}
+	s.timerRunning = true
+	s.timerGen++
+	gen := s.timerGen
+	return tea.Tick(statusTimerInterval, func(time.Time) tea.Msg {
+		return statusTimerTickMsg{gen: gen}
+	})
+}
+
+// HandleTimerTick consumes one repaint tick and reschedules while a turn is
+// still running. It reports whether the timer is what changed, which tells
+// the caller to repaint instead of reusing the memoized frame.
+func (s *Status) HandleTimerTick(msg statusTimerTickMsg) bool {
+	if msg.gen != s.timerGen {
+		return false
+	}
+	s.timerRunning = false
+	if common.Elapsed(s.sessionID) == "" {
+		return false
+	}
+	s.armTimer()
+	return true
 }
 
 // modeBadge renders the badge for the current mode, or an empty string in
@@ -118,6 +198,15 @@ func (s *Status) SetHideHelp(hideHelp bool) {
 
 // Draw draws the status bar onto the screen.
 func (s *Status) Draw(scr uv.Screen, area uv.Rectangle) {
+	// The elapsed timer sits on the hint row, hard against the right edge
+	// and far from the shortcuts, so it never reads as one of them. It is
+	// reserved out of the hint width below.
+	elapsed := s.elapsedView()
+	elapsedWidth := 0
+	if elapsed != "" {
+		elapsedWidth = lipgloss.Width(elapsed)
+	}
+
 	if !s.hideHelp {
 		helpStyle := s.com.Styles.Status.Help
 		helpWidth := area.Dx() - helpStyle.GetPaddingLeft() - helpStyle.GetPaddingRight()
@@ -126,6 +215,11 @@ func (s *Status) Draw(scr uv.Screen, area uv.Rectangle) {
 			// Shrink the hints so the badge does not push them past the
 			// status area.
 			helpWidth -= lipgloss.Width(badge) + 1 + badgeLeftInset
+		}
+		if elapsedWidth > 0 {
+			// Keep the hints clear of the timer rather than letting the
+			// help view truncate them into it.
+			helpWidth -= elapsedWidth + statusTimerGap
 		}
 		s.help.SetWidth(max(0, helpWidth))
 		helpView := helpStyle.Render(s.help.View(s.helpKm))
@@ -137,6 +231,13 @@ func (s *Status) Draw(scr uv.Screen, area uv.Rectangle) {
 			helpView = strings.Repeat(" ", badgeLeftInset) + badge + " " + helpView
 		}
 		uv.NewStyledString(helpView).Draw(scr, area)
+	}
+
+	if elapsedWidth > 0 {
+		// The first row of the status area is the one directly under the
+		// editor, which is where the shortcuts are.
+		x := max(area.Min.X, area.Max.X-elapsedWidth)
+		uv.NewStyledString(elapsed).Draw(scr, uv.Rect(x, area.Min.Y, elapsedWidth, 1))
 	}
 
 	// Render notifications

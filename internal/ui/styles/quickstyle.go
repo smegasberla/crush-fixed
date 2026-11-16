@@ -1267,6 +1267,15 @@ func quickStyle(o quickStyleOpts) Styles {
 	s.Status.WarnMessage = s.Status.SuccessMessage.Foreground(badgeInk(o.warningSubtle, o.bgMostVisible, o.fgBase)).Background(o.warningSubtle)
 	s.Status.ErrorMessage = s.Status.SuccessMessage.Foreground(o.onPrimary).Background(o.error)
 
+	// Elapsed turn timer, right-aligned on the hint row. The label uses the
+	// quieter ink so it sits beside the hints without competing with them,
+	// and the duration uses the primary hue so it reads as activity. The
+	// label is fgMoreSubtle rather than fgMostSubtle: the quietest ink drops
+	// below the 3:1 floor on the darker built-ins.
+	s.Status.Elapsed = lipgloss.NewStyle().Padding(0, 1)
+	s.Status.TimerLabel = base.Foreground(o.fgMoreSubtle)
+	s.Status.Timer = base.Foreground(o.primary).Bold(true)
+
 	// Completions styles
 	s.Completions.Normal = base.Background(o.bgLessVisible).Foreground(o.fgBase)
 	s.Completions.Focused = base.Background(o.primary).Foreground(o.onPrimary)

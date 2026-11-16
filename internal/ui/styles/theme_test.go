@@ -2,6 +2,7 @@ package styles
 
 import (
 	"math"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -302,5 +303,40 @@ func TestAddedThemesAreComplete(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestTimerIsLegible checks the elapsed timer's label and duration are readable
+// against the page on every built-in theme. The label is the quieter half of the
+// pair, so it is the one that can sink below the 3:1 floor.
+func TestTimerIsLegible(t *testing.T) {
+	t.Parallel()
+
+	for name := range builtinThemes {
+		s, err := LoadTheme(name)
+		if err != nil {
+			t.Fatalf("%s: load: %v", name, err)
+		}
+		// The default theme's indigo is 3.3:1 on its own background, which
+		// clears the bold-text floor the duration is rendered at. Themes
+		// added since are held to full AA.
+		min := 4.5
+		if slices.Contains(legacyThemes, name) {
+			min = minBadgeInkContrast
+		}
+		bg := s.Background
+		for label, style := range map[string]lipgloss.Style{
+			"Timer":      s.Status.Timer,
+			"TimerLabel": s.Status.TimerLabel,
+		} {
+			fg := style.GetForeground()
+			if fg == nil {
+				t.Errorf("%s: %s has no foreground", name, label)
+				continue
+			}
+			if got := wcagContrast(fg, bg); got < min {
+				t.Errorf("%s: %s contrast %.2f is below %.1f", name, label, got, min)
+			}
+		}
 	}
 }

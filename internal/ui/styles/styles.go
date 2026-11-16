@@ -649,6 +649,13 @@ type Styles struct {
 		InfoMessage    lipgloss.Style
 		UpdateMessage  lipgloss.Style
 		SuccessMessage lipgloss.Style
+
+		// Elapsed is the turn timer pinned to the right edge of the hint
+		// row, away from the shortcuts it shares the row with. Timer is the
+		// duration and TimerLabel the word before it.
+		Elapsed    lipgloss.Style
+		Timer      lipgloss.Style
+		TimerLabel lipgloss.Style
 	}
 
 	// Completions popup styles
