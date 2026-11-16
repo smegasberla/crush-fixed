@@ -19,10 +19,10 @@ const FetchSkillToolName = "fetch_skill"
 // FetchSkillParams is a skill load request.
 type FetchSkillParams struct {
 	// Name is the skill to load, as it appears in the skills index.
-	Name string `json:"name" description:"The skill to load, exactly as it appears in the skills index."`
+	Name string `json:"name" description:"The skill to load, named as in the skills index."`
 	// Query lists the skills instead of loading one, for when the index did not
 	// name the skill the task needs.
-	Query bool `json:"list,omitempty" description:"List every available skill with its description instead of loading one. Use it when the index does not name what you need."`
+	Query bool `json:"list,omitempty" description:"List every skill with its description instead of loading one."`
 }
 
 // NewFetchSkillTool builds the lazy skill loader.

@@ -12,9 +12,9 @@ import (
 )
 
 type CallHierarchyParams struct {
-	Symbol    string `json:"symbol" description:"The symbol name to show call hierarchy for"`
-	Direction string `json:"direction" description:"Either 'incoming' (who calls this) or 'outgoing' (what does this call)"`
-	Path      string `json:"path,omitempty" description:"The directory to search in. Defaults to the current working directory."`
+	Symbol    string `json:"symbol" description:"Symbol to trace"`
+	Direction string `json:"direction" description:"incoming (callers) or outgoing (callees)"`
+	Path      string `json:"path,omitempty" description:"Where to search (default: working directory)"`
 }
 
 const CallHierarchyToolName = "lsp_call_hierarchy"

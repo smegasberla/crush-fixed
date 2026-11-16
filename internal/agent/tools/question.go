@@ -19,9 +19,9 @@ var questionDescription string
 
 // QuestionParams defines the parameters for the question tool.
 type QuestionParams struct {
-	Questions          []QuestionItem `json:"questions" description:"List of questions to present. Single item = no tabs, multiple = tabbed form."`
-	ConfirmTitle       string         `json:"confirm_title,omitempty" description:"Title for the confirmation tab. Required for multi-question batches."`
-	ConfirmDescription string         `json:"confirm_description,omitempty" description:"Description for the confirmation tab. Required for multi-question batches."`
+	Questions          []QuestionItem `json:"questions" description:"One renders plainly, several as tabs."`
+	ConfirmTitle       string         `json:"confirm_title,omitempty" description:"Tab title, required when there are several."`
+	ConfirmDescription string         `json:"confirm_description,omitempty" description:"Tab text, required when there are several."`
 }
 
 // UnmarshalJSON handles models that double-serialize the questions field as a
@@ -56,11 +56,11 @@ func (p *QuestionParams) UnmarshalJSON(data []byte) error {
 
 // QuestionItem is a single question from the tool input.
 type QuestionItem struct {
-	Label       string           `json:"label,omitempty" description:"Short tab header label (3 words max)."`
-	Type        string           `json:"type" description:"The type of question: yes_no, single_choice, multi_choice, or free_text"`
-	Question    string           `json:"question" description:"The question text"`
-	Description string           `json:"description" description:"Required markdown description shown below the question"`
-	Choices     []QuestionChoice `json:"choices,omitempty" description:"List of choices"`
+	Label       string           `json:"label,omitempty" description:"Tab header (3 words max)."`
+	Type        string           `json:"type" description:"yes_no, single_choice, multi_choice, or free_text"`
+	Question    string           `json:"question" description:"One line."`
+	Description string           `json:"description" description:"Markdown context, required."`
+	Choices     []QuestionChoice `json:"choices,omitempty" description:"Options."`
 	Options     []QuestionChoice `json:"options,omitempty"` // alias for Choices
 }
 
@@ -74,9 +74,9 @@ func (q QuestionItem) GetChoices() []QuestionChoice {
 
 // QuestionChoice represents a selectable option.
 type QuestionChoice struct {
-	ID          string `json:"id" description:"Unique identifier for this choice"`
-	Label       string `json:"label" description:"Display text for this choice"`
-	Description string `json:"description,omitempty" description:"Optional description for this choice"`
+	ID          string `json:"id" description:"Unique identifier."`
+	Label       string `json:"label" description:"Display text."`
+	Description string `json:"description,omitempty" description:"Optional note."`
 }
 
 // QuestionResponseMetadata carries the structured questions and answers so

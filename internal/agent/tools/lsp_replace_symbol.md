@@ -1,9 +1,6 @@
-Replace, insert, or delete an entire symbol (function, method, class, struct) by name using LSP document symbols to find exact boundaries. Prefer this over `edit` for whole-symbol changes: it eliminates whitespace-matching failures by resolving symbol ranges through the language server instead of exact text matching.
+Replace, insert or delete a whole symbol (function, method, class, struct) by
+name, with the language server resolving its boundaries. Preferred over `edit`
+for whole-symbol changes because no whitespace matching is involved.
 
-Actions:
-- `replace` (default): replace the entire symbol including signature and body
-- `add_before`: insert text before the symbol
-- `add_after`: insert text after the symbol
-- `delete`: remove the symbol entirely
-
-Returns diagnostics after the edit.
+`replace` (default) swaps the symbol with its signature; `add_before` and
+`add_after` insert text beside it; `delete` removes it. Returns diagnostics.

@@ -25,8 +25,8 @@ import (
 var writeDescription string
 
 type WriteParams struct {
-	FilePath string `json:"file_path" description:"The path to the file to write"`
-	Content  string `json:"content" description:"The content to write to the file"`
+	FilePath string `json:"file_path" description:"Path of the file to write"`
+	Content  string `json:"content" description:"Full new content"`
 }
 
 type WritePermissionsParams struct {

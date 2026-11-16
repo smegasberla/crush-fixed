@@ -19,9 +19,9 @@ import (
 )
 
 type DownloadParams struct {
-	URL      string `json:"url" description:"The URL to download from"`
-	FilePath string `json:"file_path" description:"The local file path where the downloaded content should be saved"`
-	Timeout  int    `json:"timeout,omitempty" description:"Optional timeout in seconds (max 600)"`
+	URL      string `json:"url" description:"URL to download"`
+	FilePath string `json:"file_path" description:"Where to save it; overwritten without warning"`
+	Timeout  int    `json:"timeout,omitempty" description:"Seconds (max 600)"`
 }
 
 type DownloadPermissionsParams struct {

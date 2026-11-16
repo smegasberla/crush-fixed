@@ -16,10 +16,10 @@ import (
 )
 
 type SourcegraphParams struct {
-	Query         string `json:"query" description:"The Sourcegraph search query"`
-	Count         int    `json:"count,omitempty" description:"Optional number of results to return (default: 10, max: 20)"`
-	ContextWindow int    `json:"context_window,omitempty" description:"The context around the match to return (default: 10 lines)"`
-	Timeout       int    `json:"timeout,omitempty" description:"Optional timeout in seconds (max 120)"`
+	Query         string `json:"query" description:"Search query"`
+	Count         int    `json:"count,omitempty" description:"Results to return (default 10, max 20)"`
+	ContextWindow int    `json:"context_window,omitempty" description:"Lines around each match (default 10)"`
+	Timeout       int    `json:"timeout,omitempty" description:"Seconds (max 120)"`
 }
 
 type SourcegraphResponseMetadata struct {

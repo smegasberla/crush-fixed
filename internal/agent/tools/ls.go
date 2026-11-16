@@ -18,9 +18,9 @@ import (
 )
 
 type LSParams struct {
-	Path   string   `json:"path,omitempty" description:"The path to the directory to list (defaults to current working directory)"`
-	Ignore []string `json:"ignore,omitempty" description:"List of glob patterns to ignore"`
-	Depth  int      `json:"depth,omitempty" description:"The maximum depth to traverse"`
+	Path   string   `json:"path,omitempty" description:"Directory to list (default: working directory)"`
+	Ignore []string `json:"ignore,omitempty" description:"Glob patterns to ignore"`
+	Depth  int      `json:"depth,omitempty" description:"How deep to traverse"`
 }
 
 type LSPermissionsParams struct {

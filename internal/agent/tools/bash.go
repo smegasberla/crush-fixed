@@ -24,11 +24,11 @@ import (
 )
 
 type BashParams struct {
-	Description         string `json:"description" description:"A brief description of what the command does, try to keep it under 30 characters or so"`
-	Command             string `json:"command" description:"The command to execute"`
-	WorkingDir          string `json:"working_dir,omitempty" description:"The working directory to execute the command in (defaults to current directory)"`
-	RunInBackground     bool   `json:"run_in_background,omitempty" description:"Set to true (boolean) to run this command in the background. Use job_output to read the output later."`
-	AutoBackgroundAfter int    `json:"auto_background_after,omitempty" description:"Seconds to wait before automatically moving the command to a background job (default: 60)"`
+	Description         string `json:"description" description:"What the command does, under 30 characters"`
+	Command             string `json:"command" description:"Command to run"`
+	WorkingDir          string `json:"working_dir,omitempty" description:"Directory to run in (default: the working directory)"`
+	RunInBackground     bool   `json:"run_in_background,omitempty" description:"Run in the background; read it later with job_output."`
+	AutoBackgroundAfter int    `json:"auto_background_after,omitempty" description:"Seconds before it moves to the background (default 60)"`
 }
 
 type BashPermissionsParams struct {
@@ -66,10 +66,13 @@ var bashDescriptionTpl = template.Must(
 )
 
 type bashDescriptionData struct {
-	BannedCommands  string
-	MaxOutputLength int
-	RgAvailable     bool
-	GhAvailable     bool
+	// BannedCommandCount is a count, not the list: the list is user
+	// configurable, so naming it costs prompt tokens on every request to
+	// describe a policy the permission prompt states anyway.
+	BannedCommandCount int
+	MaxOutputLength    int
+	RgAvailable        bool
+	GhAvailable        bool
 }
 
 // defaultBlockedCommands is the built-in dangerous-command list. It is a
@@ -207,10 +210,10 @@ func resolveBlockedCommands(perms *config.Permissions) []string {
 func bashDescription(blocked []string) string {
 	var out bytes.Buffer
 	if err := bashDescriptionTpl.Execute(&out, bashDescriptionData{
-		BannedCommands:  strings.Join(blocked, ", "),
-		MaxOutputLength: MaxOutputLength,
-		RgAvailable:     getRg() != "",
-		GhAvailable:     ghAvailable,
+		BannedCommandCount: len(blocked),
+		MaxOutputLength:    MaxOutputLength,
+		RgAvailable:        getRg() != "",
+		GhAvailable:        ghAvailable,
 	}); err != nil {
 		// this should never happen.
 		panic("failed to execute bash description template: " + err.Error())

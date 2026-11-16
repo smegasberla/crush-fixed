@@ -47,27 +47,27 @@ func viewDescription() string {
 }
 
 type ViewParams struct {
-	FilePath string `json:"file_path,omitempty" description:"The path to the file to read"`
-	Offset   int    `json:"offset,omitempty" description:"The line number to start reading from (0-based)"`
-	Limit    int    `json:"limit,omitempty" description:"The number of lines to read (defaults to 200)"`
-	Metadata bool   `json:"metadata,omitempty" description:"Return only the header (size, line count, line endings) with no content. Cheap, and the way to decide whether a range is worth reading."`
-	Keep     bool   `json:"keep,omitempty" description:"Return the body even when this exact file range was already read this session with unchanged content. Use when the pointer is not enough."`
+	FilePath string `json:"file_path,omitempty" description:"Path of the file to read"`
+	Offset   int    `json:"offset,omitempty" description:"0-based line to start at"`
+	Limit    int    `json:"limit,omitempty" description:"Lines to read (default 200)"`
+	Metadata bool   `json:"metadata,omitempty" description:"Header only (size, lines, line endings); cheap way to judge a range."`
+	Keep     bool   `json:"keep,omitempty" description:"Return the body even if this range was already read unchanged."`
 	// Around centres the read on this 1-based line instead of offset, which is
 	// what a search result needs: it names a line, not a range.
-	Around int `json:"around,omitempty" description:"1-based line to centre the read on. Use it with a line number from a search result instead of guessing an offset."`
+	Around int `json:"around,omitempty" description:"1-based line to centre on, for a search result."`
 	// Context is how many lines each side of Around to include.
 	Context int `json:"context,omitempty" description:"Lines of context each side of around (default 40)."`
 	// Files reads several files in one call, which is one round trip for the
 	// whole batch.
-	Files []ViewFileParams `json:"files,omitempty" description:"Read several files in one call. Each item takes name plus any of offset/limit/around/context/metadata."`
+	Files []ViewFileParams `json:"files,omitempty" description:"Several files in one call."`
 }
 
 // ViewFileParams is one file in a batched read.
 type ViewFileParams struct {
-	FilePath string `json:"name" description:"The path to the file to read."`
-	Offset   int    `json:"offset,omitempty" description:"0-based line to start reading from."`
-	Limit    int    `json:"limit,omitempty" description:"How many lines to read."`
-	Around   int    `json:"around,omitempty" description:"1-based line to centre the read on."`
+	FilePath string `json:"name" description:"Path of the file to read."`
+	Offset   int    `json:"offset,omitempty" description:"0-based line to start at."`
+	Limit    int    `json:"limit,omitempty" description:"Lines to read."`
+	Around   int    `json:"around,omitempty" description:"1-based line to centre on."`
 	Context  int    `json:"context,omitempty" description:"Lines of context each side of around."`
 	Metadata bool   `json:"metadata,omitempty" description:"Return only the header."`
 }

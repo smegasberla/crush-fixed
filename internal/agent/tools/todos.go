@@ -15,13 +15,13 @@ var todosDescription string
 const TodosToolName = "todos"
 
 type TodosParams struct {
-	Todos []TodoItem `json:"todos" description:"The updated todo list"`
+	Todos []TodoItem `json:"todos" description:"The updated list"`
 }
 
 type TodoItem struct {
-	Content    string `json:"content" description:"What needs to be done (imperative form)"`
-	Status     string `json:"status" description:"Task status: pending, in_progress, or completed"`
-	ActiveForm string `json:"active_form" description:"Present continuous form (e.g., 'Running tests')"`
+	Content    string `json:"content" description:"What to do, imperative"`
+	Status     string `json:"status" description:"pending, in_progress, or completed"`
+	ActiveForm string `json:"active_form" description:"Present continuous, e.g. 'Running tests'"`
 }
 
 type TodosResponseMetadata struct {

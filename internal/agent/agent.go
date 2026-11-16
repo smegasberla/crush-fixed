@@ -1799,7 +1799,28 @@ func (a *sessionAgent) summarize(ctx context.Context, sessionID, trigger string,
 		return fmt.Errorf("%w: %s", ErrCompactionBlocked, pre.Reason)
 	}
 
-	aiMsgs, _ := a.preparePrompt(msgs, largeModel.CatwalkCfg.Capabilities.Vision, largeModel.CatwalkCfg.Capabilities.Audio)
+	// A previous compaction already folded everything up to and including its
+	// summary message into a continuation brief. Re-summarizing that prefix
+	// re-derives facts the brief already states, and it is the largest prompt
+	// this path ever sends, so the brief is carried forward verbatim and only
+	// the delta after it is summarized.
+	absorbed, previousBrief, chainPrefix := 0, "", ""
+	deltaMsgs := msgs
+	if absorbed = absorbedPrefix(msgs, currentSession.SummaryMessageID); absorbed > 0 {
+		previousBrief = strings.TrimSpace(msgs[absorbed-1].Content().Text)
+		chainPrefix = chainFor("", []fantasy.Message{fantasy.NewUserMessage(previousBrief)})
+		deltaMsgs = msgs[absorbed:]
+		if len(deltaMsgs) == 0 {
+			// The transcript has not moved since the last compaction, so the
+			// existing brief already covers every message here. Summarizing
+			// again would spend a full prompt to reproduce it.
+			slog.Info("Skipping compaction; the existing brief covers the transcript",
+				"session_id", sessionID, "absorbed_messages", absorbed)
+			return nil
+		}
+	}
+
+	aiMsgs, _ := a.preparePrompt(deltaMsgs, largeModel.CatwalkCfg.Capabilities.Vision, largeModel.CatwalkCfg.Capabilities.Audio)
 
 	// The summarizer is itself a model call. Sending it a prompt that no
 	// longer fits would fail the compaction for the same reason the turn did,
@@ -1860,12 +1881,14 @@ func (a *sessionAgent) summarize(ctx context.Context, sessionID, trigger string,
 	// every byte the summary would absorb, so a hit is proof the work is done.
 	// Reusing it costs one file read instead of a model call, and its
 	// constraints are carried into the new brief so the earliest turns still
-	// reach the next assistant.
-	var previousBrief string
+	// reach the next assistant. The chain continues the absorbed prefix's
+	// hash, so a memo written for an earlier fold is a different chain.
 	chain := ""
 	if a.reduction.enabled() {
-		chain = chainFor("", foldedFor)
+		chain = chainFor(chainPrefix, foldedFor)
 		if brief, ok := a.reduction.summaryFor(chain); ok {
+			// A memo for this exact chain already merged the carried brief
+			// with this delta, so it supersedes it.
 			previousBrief = brief
 			slog.Info("Reusing a continuation brief", "session_id", sessionID, "chars", len(brief))
 		}
@@ -1955,7 +1978,8 @@ func (a *sessionAgent) summarize(ctx context.Context, sessionID, trigger string,
 	}
 
 	// Memoize the brief so a rebuild over the same prefix costs nothing. The
-	// chain covers exactly the messages this summary absorbed.
+	// chain covers exactly the messages this summary absorbed: the carried
+	// brief plus this delta, which together are the whole transcript.
 	if a.reduction.enabled() && chain != "" {
 		if brief := summaryMessage.Content().Text; brief != "" {
 			a.reduction.rememberSummary(chain, len(msgs), brief)

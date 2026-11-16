@@ -1,1 +1,4 @@
-Edit a file by exact find-and-replace; can also create or delete content. If old_string differs from the file only in whitespace, the matching lines are still edited and new_string is re-indented to the file's style; the response says when this happened, so verify the result. For whole-function/method/type replacements prefer `lsp_replace_symbol` (no whitespace matching needed). For renames prefer `lsp_rename` (semantic, cross-file). For large edits use write.
+Find-and-replace within a file; can also create or delete content. A match that
+differs only in whitespace still edits, with new_string re-indented, and the
+response says so. Prefer `lsp_replace_symbol` for whole functions and
+`lsp_rename` for renames; use write for large rewrites.

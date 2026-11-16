@@ -67,10 +67,10 @@ var (
 )
 
 type GrepParams struct {
-	Pattern     string `json:"pattern" description:"The regex pattern to search for in file contents"`
-	Path        string `json:"path,omitempty" description:"The directory to search in. Defaults to the current working directory."`
-	Include     string `json:"include,omitempty" description:"File pattern to include in the search (e.g. \"*.js\", \"*.{ts,tsx}\")"`
-	LiteralText bool   `json:"literal_text,omitempty" description:"If true, the pattern will be treated as literal text with special regex characters escaped. Default is false."`
+	Pattern     string `json:"pattern" description:"Regex to search file contents"`
+	Path        string `json:"path,omitempty" description:"Directory to search (default: working directory)"`
+	Include     string `json:"include,omitempty" description:"File pattern to include, e.g. \"*.js\", \"*.{ts,tsx}\""`
+	LiteralText bool   `json:"literal_text,omitempty" description:"Treat the pattern as literal text, escaping regex characters."`
 }
 
 type grepMatch struct {

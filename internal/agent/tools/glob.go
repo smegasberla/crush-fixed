@@ -41,8 +41,8 @@ func globDescription() string {
 }
 
 type GlobParams struct {
-	Pattern string `json:"pattern" description:"The glob pattern to match files against"`
-	Path    string `json:"path,omitempty" description:"The directory to search in. Defaults to the current working directory."`
+	Pattern string `json:"pattern" description:"Glob to match file names"`
+	Path    string `json:"path,omitempty" description:"Directory to search (default: working directory)"`
 }
 
 type GlobResponseMetadata struct {

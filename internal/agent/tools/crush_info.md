@@ -1,19 +1,5 @@
-Get Crush's current runtime state: active model, provider, LSP/MCP status, skills, hooks, permissions, and disabled tools. No parameters needed.
-
-<usage>
-- Shows active model and provider, LSP/MCP server status, skills,
-  hooks, permissions mode, disabled tools, and key options
-- Use when diagnosing why something isn't working (missing diagnostics,
-  provider errors, MCP disconnections)
-- No parameters needed — always returns the full current state
-</usage>
-
-<tips>
-- Check [lsp] and [mcp] sections for service health
-- Check [providers] to see which providers are enabled and available
-- Check [skills] to see which skills are available and whether they have been
-  loaded this session
-- Check [hooks] to see which hook events are configured and whether the
-  hook runner is active
-- Pair with the crush-config skill to fix configuration issues
-</tips>
+Crush's current runtime state: model, provider, LSP/MCP status, skills, hooks,
+permissions, disabled tools, key options. No parameters. Use it when something
+is not working; check [lsp] and [mcp] for service health, [providers] for what
+is enabled, [skills] for what is loaded this session, [hooks] for hooked events.
+Pair with the crush-config skill to fix configuration.

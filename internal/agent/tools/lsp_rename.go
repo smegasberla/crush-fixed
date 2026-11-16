@@ -19,9 +19,9 @@ import (
 )
 
 type RenameParams struct {
-	Symbol  string `json:"symbol" description:"The symbol name to rename"`
-	NewName string `json:"new_name" description:"The new name for the symbol"`
-	Path    string `json:"path,omitempty" description:"The directory to search in. Defaults to the current working directory."`
+	Symbol  string `json:"symbol" description:"Symbol to rename"`
+	NewName string `json:"new_name" description:"New name"`
+	Path    string `json:"path,omitempty" description:"Where to search (default: working directory)"`
 }
 
 const RenameToolName = "lsp_rename"

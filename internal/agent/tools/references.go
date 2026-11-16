@@ -18,8 +18,8 @@ import (
 )
 
 type ReferencesParams struct {
-	Symbol string `json:"symbol" description:"The symbol name to search for (e.g., function name, variable name, type name)"`
-	Path   string `json:"path,omitempty" description:"The directory to search in. Use a directory/file to narrow down the symbol search. Defaults to the current working directory."`
+	Symbol string `json:"symbol" description:"Symbol to find (function, variable, type)"`
+	Path   string `json:"path,omitempty" description:"File or directory to narrow the search (default: working directory)"`
 }
 
 const ReferencesToolName = "lsp_references"

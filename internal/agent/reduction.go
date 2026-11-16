@@ -271,6 +271,26 @@ func dropOldestToCeiling(system string, messages []fantasy.Message, ceiling int)
 	return messages[start:], start
 }
 
+// absorbedPrefix returns how many leading messages a previous compaction
+// already folded into a continuation brief, given the session's current
+// summary message ID.
+//
+// getSessionMessages starts the transcript at that summary message and rewrites
+// it to a user message, so the brief is the first message and everything before
+// it is gone. The count is therefore the position of the brief plus one, and
+// everything at or after the count is the delta a new compaction must read.
+func absorbedPrefix(msgs []message.Message, summaryMessageID string) int {
+	if summaryMessageID == "" {
+		return 0
+	}
+	for i, msg := range msgs {
+		if msg.ID == summaryMessageID {
+			return i + 1
+		}
+	}
+	return 0
+}
+
 // chainFor computes the digest chain hash for a message prefix, so a brief is
 // memoized against exactly the content it absorbed.
 func chainFor(previous string, messages []fantasy.Message) string {

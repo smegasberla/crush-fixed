@@ -22,30 +22,30 @@ import (
 )
 
 type EditParams struct {
-	FilePath   string `json:"file_path" description:"The absolute path to the file to modify"`
-	OldString  string `json:"old_string,omitempty" description:"The text to replace"`
-	NewString  string `json:"new_string,omitempty" description:"The text to replace it with"`
-	ReplaceAll bool   `json:"replace_all,omitempty" description:"Change EVERY occurrence of old_string. Only when that is the intent."`
+	FilePath   string `json:"file_path" description:"Absolute path of the file to modify"`
+	OldString  string `json:"old_string,omitempty" description:"Text to replace"`
+	NewString  string `json:"new_string,omitempty" description:"Replacement text"`
+	ReplaceAll bool   `json:"replace_all,omitempty" description:"Replace every occurrence, not just the first."`
 	// Line addressing lets the model edit text it has not copied verbatim.
-	Line    int    `json:"line,omitempty" description:"1-based line to replace, for when the current text cannot be quoted exactly. Requires expect."`
-	EndLine int    `json:"end_line,omitempty" description:"1-based inclusive end of the region to replace. Defaults to line."`
-	Expect  string `json:"expect,omitempty" description:"Text that must be present at the addressed line. It proves the line number is not stale; without it a wrong address silently edits the wrong line."`
-	Delete  bool   `json:"delete,omitempty" description:"Remove the addressed region instead of replacing it. Requires expect, because a deletion reveals nothing about a stale number."`
+	Line    int    `json:"line,omitempty" description:"1-based line to address, for text that cannot be quoted. Requires expect."`
+	EndLine int    `json:"end_line,omitempty" description:"Inclusive end of that region. Defaults to line."`
+	Expect  string `json:"expect,omitempty" description:"Text that must sit at that line, proving it is not stale."`
+	Delete  bool   `json:"delete,omitempty" description:"Remove the addressed region."`
 	// Ops applies several regions of THIS one file as one transaction, all
 	// validated against one snapshot.
-	Ops []EditOpParams `json:"ops,omitempty" description:"Several regions of this one file as one transaction. Each item carries old_string/new_string, or line/end_line/expect with optional delete. All are validated against one snapshot, and nothing is written if any one fails."`
+	Ops []EditOpParams `json:"ops,omitempty" description:"Several regions of this file in one transaction; nothing is written if any fails."`
 }
 
 // EditOpParams is one region of a multi-region edit.
 type EditOpParams struct {
-	ID         string `json:"id,omitempty" description:"Short name for this op, so a refusal can point at it."`
-	OldString  string `json:"old_string,omitempty" description:"The text to replace."`
-	NewString  string `json:"new_string,omitempty" description:"The text to replace it with."`
+	ID         string `json:"id,omitempty" description:"Short name for this op, for refusal messages."`
+	OldString  string `json:"old_string,omitempty" description:"Text to replace."`
+	NewString  string `json:"new_string,omitempty" description:"Replacement text."`
 	Line       int    `json:"line,omitempty" description:"1-based line to address."`
-	EndLine    int    `json:"end_line,omitempty" description:"1-based inclusive end of the addressed region."`
-	Expect     string `json:"expect,omitempty" description:"Text that must be present at the addressed line."`
-	Delete     bool   `json:"delete,omitempty" description:"Remove the addressed region."`
-	ReplaceAll bool   `json:"replace_all,omitempty" description:"Change every occurrence of old_string."`
+	EndLine    int    `json:"end_line,omitempty" description:"Inclusive end of the region."`
+	Expect     string `json:"expect,omitempty" description:"Text that must sit at that line."`
+	Delete     bool   `json:"delete,omitempty" description:"Remove the region."`
+	ReplaceAll bool   `json:"replace_all,omitempty" description:"Replace every occurrence."`
 }
 
 type EditPermissionsParams struct {
