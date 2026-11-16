@@ -33,3 +33,18 @@ func TestSetSkillDisabledConfigOnlyTouchesScopeFile(t *testing.T) {
 	}
 	require.Equal(t, []string{"charmtone", "global-one"}, got)
 }
+
+// TestEveryPromptToolIsReachable guards the seam between the system prompt and
+// the tool registry. The prompt tells the model to call named tools, and the
+// coordinator silently drops any tool missing from an agent's AllowedTools, so a
+// tool that is built but never allowlisted becomes a tool the model is told to
+// call and cannot. fetch_skill shipped that way: the coder prompt made loading a
+// skill mandatory while the allowlist never listed it.
+func TestEveryPromptToolIsReachable(t *testing.T) {
+	t.Parallel()
+
+	names := allToolNames()
+	for _, want := range []string{"fetch_skill"} {
+		require.Contains(t, names, want, "the prompts tell the model to call %s", want)
+	}
+}

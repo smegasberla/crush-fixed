@@ -1756,6 +1756,7 @@ func allToolNames() []string {
 		"lsp_replace_symbol",
 		"fetch",
 		"agentic_fetch",
+		"fetch_skill",
 		"glob",
 		"grep",
 		"ls",
