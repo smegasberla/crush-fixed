@@ -147,17 +147,18 @@ func TestDigestToolResultsDeduplicatesRepeatedBodies(t *testing.T) {
 		userText("between"),
 		toolCall("c2", "bash", `{}`),
 		toolResult("c2", body),
+		userText("after"),
 		userText("tail"),
 	}
-	// Keep the last two messages intact so the newest result is protected and
-	// only the older duplicate can be replaced.
+	// The first copy stays; the later duplicate is stubbed. Keeping the
+	// earliest byte-for-byte is what lets a provider reuse the cached prefix.
 	out, stats := DigestToolResults(messages, DigestOptions{MinTokens: 10, KeepRecentMessages: 2})
 	require.Equal(t, 1, stats.Deduplicated)
 
 	first := resultTextOf(t, out[1])
-	require.Contains(t, first, "identical output is still in this conversation later")
-	// The newest copy is untouched: it is the one the model is working from.
-	require.Equal(t, body, resultTextOf(t, out[4]))
+	require.NotContains(t, first, "already in this conversation earlier",
+		"the first occurrence must not be replaced by the duplicate stub")
+	require.Contains(t, resultTextOf(t, out[4]), "already in this conversation earlier")
 }
 
 func TestDigestToolResultsPerToolCaps(t *testing.T) {

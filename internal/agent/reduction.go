@@ -211,25 +211,25 @@ func (r *reductionState) repack(system string, messages []fantasy.Message, adver
 	outcome.Before = contextreduction.Summarize(system, messages).Total()
 	outcome.After = outcome.Before
 
-	// Digesting and superseded-read stubbing run every round, not only when
-	// the prompt hits the ceiling. Stale tool output is stale the moment the
-	// next round starts: waiting until the window is nearly full means every
-	// request in between pays for output nothing will read again, which is
-	// most of the cost of a long session.
-	//
-	// Only dropping whole messages waits for the ceiling, because that is the
-	// change that actually loses conversation.
+	// A provider caches an identical prefix from the first token, at roughly
+	// a tenth of the price. Rewriting an older tool result to save its body
+	// changes that prefix and loses the cache for everything after it, which
+	// costs more than keeping a stale body in cache. Digesting and read
+	// stubbing therefore run only when the prompt actually exceeds the
+	// ceiling; below it the transcript is left byte-for-byte intact.
 	out := messages
 	var pointerStats contextreduction.PointerStats
 	var digestStats contextreduction.DigestStats
-	if outcome.Before > 0 {
-		out, pointerStats = contextreduction.SupersededReadStubs(messages, r.pointerOptions())
-		out, digestStats = contextreduction.DigestToolResults(out, r.digestOptions())
+	if outcome.Before > ceiling {
+		if outcome.Before > 0 {
+			out, pointerStats = contextreduction.SupersededReadStubs(messages, r.pointerOptions())
+			out, digestStats = contextreduction.DigestToolResults(out, r.digestOptions())
+		}
+		outcome.PointerStubs = pointerStats.Stubbed
+		outcome.Digested = digestStats.Digested
+		outcome.Deduplicated = digestStats.Deduplicated
+		outcome.After = contextreduction.Summarize(system, out).Total()
 	}
-	outcome.PointerStubs = pointerStats.Stubbed
-	outcome.Digested = digestStats.Digested
-	outcome.Deduplicated = digestStats.Deduplicated
-	outcome.After = contextreduction.Summarize(system, out).Total()
 
 	if outcome.Before <= ceiling {
 		return out, outcome

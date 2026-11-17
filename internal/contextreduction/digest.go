@@ -126,12 +126,19 @@ func DigestToolResults(messages []fantasy.Message, opts DigestOptions) ([]fantas
 		stats.TokensBefore += ref.tokens
 	}
 
-	// A body is duplicated when the identical text is still present later in
-	// the conversation. The newest occurrence is the one that stays.
-	newestIndex := make(map[string]int, len(refs))
+	// A body is duplicated when the identical text was already present
+	// earlier in the conversation. The earliest occurrence stays.
+	//
+	// Which copy is kept matters for prompt caching: providers cache an
+	// identical prefix from the first token, so replacing an earlier message
+	// when a duplicate arrives invalidates everything cached up to that
+	// point. Stubbing the new copy instead leaves every earlier byte intact,
+	// and an identical body loses nothing by being represented by its first
+	// occurrence.
+	firstIndex := make(map[string]int, len(refs))
 	for _, ref := range refs {
-		if later, ok := newestIndex[ref.hash]; !ok || ref.msg > later {
-			newestIndex[ref.hash] = ref.msg
+		if _, ok := firstIndex[ref.hash]; !ok {
+			firstIndex[ref.hash] = ref.msg
 		}
 	}
 
@@ -157,7 +164,7 @@ func DigestToolResults(messages []fantasy.Message, opts DigestOptions) ([]fantas
 			stats.TokensAfter += ref.tokens
 			continue
 		}
-		if later := newestIndex[ref.hash]; later > ref.msg {
+		if firstIndex[ref.hash] < ref.msg {
 			stub := duplicateStub(name, ref.tokens, ref.hash)
 			replacements[ref.callID] = stub
 			stats.Deduplicated++
@@ -340,7 +347,7 @@ func digestedStub(toolName, body, hash string, opts DigestOptions) string {
 // duplicateStub renders the replacement for a body whose identical text is
 // still present later in the conversation.
 func duplicateStub(toolName string, tokens int, hash string) string {
-	return fmt.Sprintf("[%s result repeated: identical output is still in this conversation later (%d tokens, sha256:%s). Use that copy instead of re-running the call.]", toolLabel(toolName), tokens, hash)
+	return fmt.Sprintf("[%s result repeated: identical output was already in this conversation earlier (%d tokens, sha256:%s). Use that copy instead of re-running the call.]", toolLabel(toolName), tokens, hash)
 }
 
 func toolLabel(name string) string {
