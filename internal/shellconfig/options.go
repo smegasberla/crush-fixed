@@ -117,6 +117,13 @@ func handleOption(ctx context.Context, args []string, stdin io.Reader, stdout, s
 		return usage(stderr, fmt.Sprintf("option: unknown key %q", key))
 	}
 
+	// A key with a parent section writes into that nested object instead of
+	// the top-level options object, so e.g. compaction keys land under
+	// context_reduction where the agent reads them.
+	if spec.section != "" {
+		o = childMap(o, spec.section)
+	}
+
 	switch spec.kind {
 	case optList:
 		if val == "" {
@@ -150,7 +157,10 @@ func handleOption(ctx context.Context, args []string, stdin io.Reader, stdout, s
 		}
 		n, err := strconv.Atoi(val)
 		if err != nil {
-			return usage(stderr, fmt.Sprintf("option: %s expects a number of seconds, got %q", key, val))
+			if spec.unit != "" {
+				return usage(stderr, fmt.Sprintf("option: %s expects a number of %s, got %q", key, spec.unit, val))
+			}
+			return usage(stderr, fmt.Sprintf("option: %s expects a number, got %q", key, val))
 		}
 		o[spec.jsonKey] = n
 		slog.Info("Option set in shell config", "key", key, "value", n)
@@ -185,6 +195,12 @@ type optionSpec struct {
 	jsonKey  string
 	kind     optionKind
 	inverted bool
+	// section, when set, is the parent object the key is written into
+	// rather than the top-level options object (e.g. context_reduction).
+	section string
+	// unit names what the integer measures, for error messages: "seconds",
+	// "tokens".
+	unit string
 }
 
 // optionSpecs maps user-facing kebab-case keys to their JSON field and type.
@@ -215,9 +231,18 @@ var optionSpecs = map[string]optionSpec{
 	"initialize-as":  {jsonKey: "initialize_as", kind: optString},
 
 	// Integer fields.
-	"request-timeout":        {jsonKey: "request_timeout", kind: optInt},
+	"request-timeout":        {jsonKey: "request_timeout", kind: optInt, unit: "seconds"},
 	"max-background-jobs":    {jsonKey: "max_background_jobs", kind: optInt},
-	"pinentry-cache-timeout": {jsonKey: "pinentry_cache_timeout", kind: optInt},
+	"pinentry-cache-timeout": {jsonKey: "pinentry_cache_timeout", kind: optInt, unit: "seconds"},
+
+	// Context reduction. These live under options.context_reduction, which is
+	// what decides when a session compacts; the primary config format has to
+	// be able to set them or the trigger is only reachable from JSON.
+	"compaction-trigger-tokens": {jsonKey: "compaction_trigger_tokens", kind: optInt, section: "context_reduction", unit: "tokens"},
+	"compaction-budget-tokens":  {jsonKey: "compaction_budget_tokens", kind: optInt, section: "context_reduction", unit: "tokens"},
+	"response-reserve-tokens":   {jsonKey: "response_reserve_tokens", kind: optInt, section: "context_reduction", unit: "tokens"},
+	"tool-result-digest-tokens": {jsonKey: "tool_result_digest_tokens", kind: optInt, section: "context_reduction", unit: "tokens"},
+	"context-reduction":         {jsonKey: "enabled", kind: optBool, section: "context_reduction"},
 
 	// List fields. Keys are singular because each call appends one value.
 	"context-path":        {jsonKey: "context_paths", kind: optList},

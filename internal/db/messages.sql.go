@@ -254,8 +254,8 @@ const listMessagesBySessionFromSummary = `-- name: ListMessagesBySessionFromSumm
 SELECT m.id, m.session_id, m.role, m.parts, m.model, m.created_at, m.updated_at, m.finished_at, m.provider, m.is_summary_message, m.prism_model_id, m.prism_model_name, m.prism_hypercredit_savings, m.prism_dollar_savings, m.model_name
 FROM messages m
 WHERE m.session_id = ?
-  AND m.created_at >= (SELECT s.created_at FROM messages s WHERE s.id = ?)
-ORDER BY m.created_at ASC
+  AND m.rowid >= (SELECT s.rowid FROM messages s WHERE s.id = ?)
+ORDER BY m.rowid ASC
 `
 
 type ListMessagesBySessionFromSummaryParams struct {
@@ -263,9 +263,11 @@ type ListMessagesBySessionFromSummaryParams struct {
 	ID        string `json:"id"`
 }
 
-// Messages from the summary onward, which is all a compacted session sends.
-// created_at has one-second resolution, so a few messages preceding the
-// summary can come back too; the caller slices from the summary by ID.
+// Messages at or after the window marker, which is all a compacted session
+// sends. created_at has one-second resolution, so every message written in the
+// same second as the marker shares its timestamp; selecting by it would return
+// the whole transcript and the fold would never apply. rowid is monotonic, so
+// the marker's rowid is an exact lower bound.
 func (q *Queries) ListMessagesBySessionFromSummary(ctx context.Context, arg ListMessagesBySessionFromSummaryParams) ([]Message, error) {
 	rows, err := q.query(ctx, q.listMessagesBySessionFromSummaryStmt, listMessagesBySessionFromSummary, arg.SessionID, arg.ID)
 	if err != nil {

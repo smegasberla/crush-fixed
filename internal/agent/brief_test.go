@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -10,6 +11,7 @@ import (
 
 	"charm.land/fantasy"
 	"github.com/charmbracelet/crush/internal/config"
+	"github.com/charmbracelet/crush/internal/contextreduction"
 	"github.com/charmbracelet/crush/internal/message"
 	"github.com/charmbracelet/crush/internal/session"
 	"github.com/stretchr/testify/require"
@@ -421,4 +423,66 @@ func TestCompactionWindowIsNoteThenTail(t *testing.T) {
 	}
 	require.Contains(t, tail.String(), "newest", "the fold keeps the recent conversation")
 	require.NotContains(t, tail.String(), "oldest", "the fold drops the oldest work")
+}
+
+// TestCompactionActuallyShrinksTheNextPrompt is the end-to-end guard for the
+// bug that made every compaction a no-op: the window marker was resolved by a
+// timestamp, every message was written in the same second, so the whole
+// transcript came back and the fold changed nothing while reporting success.
+func TestCompactionActuallyShrinksTheNextPrompt(t *testing.T) {
+	t.Parallel()
+
+	env := testEnv(t)
+	sa := testSessionAgent(env, &recordingStreamModel{text: ""}, &finishStreamModel{text: "t"}, "sys").(*sessionAgent)
+	sa.reduction = newReductionState(&ReductionOptions{
+		Settings: &config.ContextReductionOptions{
+			CompactionTriggerTokens: intPtr(1_000_000),
+			CompactionBudgetTokens:  intPtr(1_000_000),
+		},
+		DigestDir: t.TempDir(),
+		Provider:  "p",
+		Model:     "m",
+	})
+
+	ctx := t.Context()
+	sess, err := env.sessions.Create(ctx, "session")
+	require.NoError(t, err)
+
+	// Fat messages written directly, so no agent turn compacts them first.
+	blob := strings.Repeat("x", 4000)
+	for i := range 40 {
+		_, err := env.messages.Create(ctx, sess.ID, message.CreateMessageParams{
+			Role:  message.User,
+			Parts: []message.ContentPart{message.TextContent{Text: fmt.Sprintf("%d %s", i, blob)}},
+		})
+		require.NoError(t, err)
+	}
+
+	windowBefore, err := sa.getSessionMessages(ctx, mustSession(t, env, sess.ID))
+	require.NoError(t, err)
+	before := contextreduction.Summarize("", aiOf(t, sa, windowBefore)).Total()
+
+	// Now compact with a trigger the transcript exceeds.
+	sa.reduction.settings = &config.ContextReductionOptions{
+		CompactionTriggerTokens: intPtr(5000),
+		CompactionBudgetTokens:  intPtr(5000),
+		ResponseReserveTokens:   intPtr(100),
+	}
+	require.NoError(t, sa.Summarize(ctx, sess.ID, nil, nil))
+
+	windowAfter, err := sa.getSessionMessages(ctx, mustSession(t, env, sess.ID))
+	require.NoError(t, err)
+	after := contextreduction.Summarize("", aiOf(t, sa, windowAfter)).Total()
+
+	require.Less(t, len(windowAfter), len(windowBefore), "the window must actually shrink")
+	require.Less(t, after, before, "the next prompt must be smaller than the one before it")
+	require.Greater(t, float64(before-after)/float64(before), 0.5,
+		"a compaction over a fat transcript must save most of it, got %d -> %d tokens", before, after)
+}
+
+// aiOf converts stored messages to the prompt shape, for size comparisons.
+func aiOf(t *testing.T, sa *sessionAgent, msgs []message.Message) []fantasy.Message {
+	t.Helper()
+	ai, _ := sa.preparePrompt(msgs, false, false)
+	return ai
 }

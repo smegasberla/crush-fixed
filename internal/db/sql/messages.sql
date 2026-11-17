@@ -10,14 +10,16 @@ WHERE session_id = ?
 ORDER BY created_at ASC;
 
 -- name: ListMessagesBySessionFromSummary :many
--- Messages from the summary onward, which is all a compacted session sends.
--- created_at has one-second resolution, so a few messages preceding the
--- summary can come back too; the caller slices from the summary by ID.
+-- Messages at or after the window marker, which is all a compacted session
+-- sends. created_at has one-second resolution, so every message written in the
+-- same second as the marker shares its timestamp; selecting by it would return
+-- the whole transcript and the fold would never apply. rowid is monotonic, so
+-- the marker's rowid is an exact lower bound.
 SELECT m.*
 FROM messages m
 WHERE m.session_id = ?
-  AND m.created_at >= (SELECT s.created_at FROM messages s WHERE s.id = ?)
-ORDER BY m.created_at ASC;
+  AND m.rowid >= (SELECT s.rowid FROM messages s WHERE s.id = ?)
+ORDER BY m.rowid ASC;
 
 -- name: CreateMessage :one
 INSERT INTO messages (

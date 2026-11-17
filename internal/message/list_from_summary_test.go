@@ -29,21 +29,18 @@ func TestListFromSummary(t *testing.T) {
 		require.Len(t, got, len(ids))
 	})
 
-	t.Run("returns the summary message and everything after it", func(t *testing.T) {
+	t.Run("returns exactly the summary message and what follows", func(t *testing.T) {
 		t.Parallel()
 
 		got, err := svc.ListFromSummary(t.Context(), sessionID, ids[2])
 		require.NoError(t, err)
 
-		// created_at is second-resolution, so same-second messages may
-		// also come back; what matters is nothing after it was dropped.
-		byID := make(map[string]bool, len(got))
-		for _, m := range got {
-			byID[m.ID] = true
-		}
-		for _, id := range ids[2:] {
-			require.True(t, byID[id], "message at or after the summary must be returned")
-		}
+		// Every message here was written in the same second, so a
+		// timestamp-based cut would return all five. The window marker has to
+		// be an exact position, or a compaction silently changes nothing.
+		require.Len(t, got, 3, "the window must start exactly at the marker")
+		require.Equal(t, ids[2], got[0].ID)
+		require.Equal(t, ids[4], got[2].ID)
 	})
 
 	// A missing summary must not silently erase the history.

@@ -1595,7 +1595,13 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 			return nil, summarizeErr
 		case len(currentAssistant.ToolCalls()) > 0:
 			existing, _ := a.messageQueue.Get(call.SessionID)
-			call.Prompt = fmt.Sprintf("The previous session was interrupted because it got too long, the initial user request was: `%s`", call.Prompt)
+			// Wrap once. Compaction can fire more than once in a session, and
+			// wrapping an already-wrapped prompt nests it a level deeper every
+			// time, so the text grows without bound and each copy is paid for
+			// on every request.
+			if !strings.HasPrefix(call.Prompt, interruptedPromptPrefix) {
+				call.Prompt = fmt.Sprintf("%s%s`", interruptedPromptPrefix, call.Prompt)
+			}
 			// The rewritten prompt is a new message, not the report.
 			call.Report = nil
 			a.messageQueue.Set(call.SessionID, append(existing, call))
@@ -2187,6 +2193,11 @@ func (a *sessionAgent) getSessionMessages(ctx context.Context, session session.S
 	}
 	return msgs, nil
 }
+
+// interruptedPromptPrefix opens a prompt replayed after a compaction cut a
+// turn short. It is a constant so a second compaction can recognise a prompt it
+// already wrapped and leave it alone.
+const interruptedPromptPrefix = "The previous session was interrupted because it got too long, the initial user request was: `"
 
 // compactionNoteID is the synthetic id of the note that opens a compacted
 // window. It is never written to the database.

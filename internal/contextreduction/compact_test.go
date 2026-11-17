@@ -159,3 +159,43 @@ func firstText(messages []fantasy.Message) string {
 	}
 	return ""
 }
+
+// TestCompactLocallyShrinksThePrompt is the property the whole design exists
+// for: after a compaction the prompt must be materially smaller, and it must
+// land at the configured budget rather than at the size that triggered it.
+func TestCompactLocallyShrinksThePrompt(t *testing.T) {
+	t.Parallel()
+
+	messages := messagesOfSize(60, 1000)
+	opts := CompactOptions{TriggerTokens: 45000, BudgetTokens: 20000, ReserveTokens: 8192}
+	out, plan := CompactLocally("", messages, "", opts)
+
+	require.True(t, plan.Compact, "a prompt over the trigger must compact")
+	require.Greater(t, plan.Total, opts.TriggerTokens)
+	require.NotEmpty(t, out)
+
+	after := Summarize("", out).Total()
+	require.Less(t, after, plan.Total, "compaction must shrink the prompt")
+	require.LessOrEqual(t, after, opts.BudgetTokens+2000,
+		"the kept tail must land near the budget, not near the trigger")
+	require.Contains(t, out[0].Content[0].(fantasy.TextPart).Text, "compacted",
+		"the window opens with the note that explains the fold")
+}
+
+// TestCompactLocallyKeepsTheAnswerHeadroomOutOfTheBudget pins the arithmetic:
+// the reserve is headroom for the answer, so it must not be subtracted from the
+// budget, which would fold further than the user asked for.
+func TestCompactLocallyKeepsTheAnswerHeadroomOutOfTheBudget(t *testing.T) {
+	t.Parallel()
+
+	messages := messagesOfSize(60, 1000)
+	base := CompactOptions{TriggerTokens: 45000, BudgetTokens: 20000, ReserveTokens: 0}
+	withReserve := base
+	withReserve.ReserveTokens = 8000
+
+	_, planBase := CompactLocally("", messages, "", base)
+	_, planReserve := CompactLocally("", messages, "", withReserve)
+
+	require.Equal(t, planBase.KeptMessages, planReserve.KeptMessages,
+		"the reserve is answer headroom and must not change what is kept")
+}

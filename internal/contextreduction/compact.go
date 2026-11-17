@@ -258,10 +258,15 @@ func CompactLocally(system string, messages []fantasy.Message, brief string, opt
 		return messages, plan
 	}
 
-	// The reserve is held back from the budget so the answer always fits. The
-	// brief and the note are paid for out of what is left, never out of the
-	// reserve: a compaction that eats its own headroom just overflows later.
-	available := opts.BudgetTokens - opts.ReserveTokens
+	// The budget is the target size of the prompt itself, and the reserve is
+	// headroom the answer gets on top of it, so the reserve is not taken out
+	// of the budget. Subtracting it would make a compaction fold further than
+	// the user asked for while the prompt sent is smaller than the budget
+	// anyway.
+	//
+	// The brief and the note are paid for out of the budget, because they are
+	// part of the prompt being built.
+	available := opts.BudgetTokens
 	if available < 0 {
 		available = 0
 	}

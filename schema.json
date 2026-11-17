@@ -135,16 +135,18 @@
         "compaction_trigger_tokens": {
           "type": "integer",
           "description": "Prompt size in tokens that triggers session compaction",
-          "default": 70000,
+          "default": 45000,
           "examples": [
-            50000
+            30000,
+            70000
           ]
         },
         "compaction_budget_tokens": {
           "type": "integer",
           "description": "Target prompt size in tokens after compaction",
-          "default": 70000,
+          "default": 25000,
           "examples": [
+            15000,
             60000
           ]
         },

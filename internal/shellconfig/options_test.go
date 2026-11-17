@@ -274,3 +274,33 @@ func TestOption_RequestTimeoutInvalid(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "expects a number of seconds")
 }
+
+// TestOption_CompactionSettings covers the context-reduction keys. They live
+// under options.context_reduction, and the primary config format has to reach
+// them; otherwise when a session compacts is only controllable from JSON.
+func TestOption_CompactionSettings(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	script := `option compaction-trigger-tokens 30000
+option compaction-budget-tokens 15000
+option response-reserve-tokens 4096
+option tool-result-digest-tokens 512
+option context-reduction true`
+	path := filepath.Join(dir, "crushrc")
+
+	jsonBytes, err := LoadShellConfig(t.Context(), path, []byte(script))
+	require.NoError(t, err)
+
+	var result map[string]any
+	require.NoError(t, json.Unmarshal(jsonBytes, &result))
+
+	opts := result["options"].(map[string]any)
+	reduction, ok := opts["context_reduction"].(map[string]any)
+	require.True(t, ok, "compaction keys must land under options.context_reduction")
+	require.Equal(t, float64(30000), reduction["compaction_trigger_tokens"])
+	require.Equal(t, float64(15000), reduction["compaction_budget_tokens"])
+	require.Equal(t, float64(4096), reduction["response_reserve_tokens"])
+	require.Equal(t, float64(512), reduction["tool_result_digest_tokens"])
+	require.Equal(t, true, reduction["enabled"])
+}

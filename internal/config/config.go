@@ -993,9 +993,9 @@ type ContextReductionOptions struct {
 	Enabled *bool `json:"enabled,omitempty" jsonschema:"description=Enable context reduction (compaction\\, digesting\\, pointer stubs\\, learned ceiling),default=true"`
 	// CompactionTriggerTokens triggers a rebuilt request (summary plus a
 	// recent tail) once the prompt reaches this many tokens.
-	CompactionTriggerTokens *int `json:"compaction_trigger_tokens,omitempty" jsonschema:"description=Prompt size in tokens that triggers session compaction,default=70000,example=50000"`
+	CompactionTriggerTokens *int `json:"compaction_trigger_tokens,omitempty" jsonschema:"description=Prompt size in tokens that triggers session compaction,default=45000,example=30000,example=70000"`
 	// CompactionBudgetTokens is the target size of the rebuilt request.
-	CompactionBudgetTokens *int `json:"compaction_budget_tokens,omitempty" jsonschema:"description=Target prompt size in tokens after compaction,default=70000,example=60000"`
+	CompactionBudgetTokens *int `json:"compaction_budget_tokens,omitempty" jsonschema:"description=Target prompt size in tokens after compaction,default=25000,example=15000,example=60000"`
 	// CompactionSummaryTokens caps the generated summary.
 	CompactionSummaryTokens *int `json:"compaction_summary_tokens,omitempty" jsonschema:"description=Token budget for the compaction summary,default=2000,example=4000"`
 	// ResponseReserveTokens is held back from the budget so the answer
@@ -1026,8 +1026,15 @@ type ContextReductionOptions struct {
 // Defaults for the context-reduction stack. They are the values measured to
 // work on real sessions; raising them trades prompt cost for recall.
 const (
-	DefaultCompactionTriggerTokens = 70000
-	DefaultCompactionBudgetTokens  = 70000
+	// DefaultCompactionTriggerTokens starts a compaction. It is deliberately
+	// well below a large window: the point is to keep every request cheap,
+	// not only to survive an overflow. Compacting at the window means every
+	// request up to that size carries the whole transcript.
+	DefaultCompactionTriggerTokens = 45000
+	// DefaultCompactionBudgetTokens is the prompt size a compaction targets.
+	// It sits below the trigger so a fold actually shrinks the prompt; equal
+	// values would compact and land on the size that triggered it.
+	DefaultCompactionBudgetTokens  = 25000
 	DefaultCompactionSummaryTokens = 2000
 	DefaultResponseReserveTokens   = 8192
 	DefaultToolResultDigestTokens  = 1024
