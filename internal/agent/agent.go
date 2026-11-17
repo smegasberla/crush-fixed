@@ -1926,11 +1926,16 @@ func (a *sessionAgent) summarize(ctx context.Context, sessionID, trigger string,
 	if continuityText != "" {
 		note = "Work already done in the folded part:\n" + continuityText + "\n\n" + note
 	}
+	markerPrompt, _ := a.preparePrompt(msgs[len(msgs)-kept:], false, false)
+	// A recent tail made of large tool results can be far bigger than the
+	// budget even with only two messages. Reduce those results to addressable
+	// stubs so a "90K" compaction actually lands near 90K.
+	fitted, _ := contextreduction.FitTailToBudget(markerPrompt, max(0, compactOpts.BudgetTokens-compactOpts.OverheadTokens))
+	builtTokens := contextreduction.Summarize("", fitted).Total()
 	if a.reduction.enabled() {
 		a.reduction.rememberNote(marker.ID, note)
 	}
 
-	builtTokens := contextreduction.Summarize("", aiMsgs[plan.TailStart:]).Total()
 	a.compactions.record(compactionRecord{
 		SessionID:       sessionID,
 		Trigger:         trigger,

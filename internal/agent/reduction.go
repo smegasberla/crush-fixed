@@ -235,6 +235,11 @@ func (r *reductionState) repack(system string, messages []fantasy.Message, adver
 		return out, outcome
 	}
 
+	// A recent tail made of one or two enormous tool results can exceed the
+	// ceiling on its own, so no amount of dropping older messages helps.
+	// Bound those results to addressable stubs before the final drop.
+	out, _ = contextreduction.FitTailToBudget(out, ceiling)
+
 	// Whole messages, front first, once the cheap stages were not enough.
 	out, dropped := dropOldestToCeiling(system, out, ceiling)
 	outcome.DroppedMessages = dropped

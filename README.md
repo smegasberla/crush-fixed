@@ -25,49 +25,70 @@ want the same agent at a fraction of the prompt.
 
 ## Measured results
 
-Taken on one machine, against the same model and the same sessions. Each number
-is reproducible from the code in this repository.
+Measured on this machine with the shipped defaults. A token estimate uses four
+bytes per token; provider billing is the authority when the two differ.
 
-| | upstream | this fork |
-|---|---|---|
-| System prompt per request | 39 444 tokens | **6 941 tokens** (−82 %) |
-| Installed skills described in the prompt | 31 269 tokens | 2 600 tokens |
-| Stale tool output, 1.2M-token transcript | 1 200 000 tokens re-sent | **201 000 tokens**, nothing dropped |
-| Realistic 30-round session, 260k window | 95 000 tokens/request | **61 000 tokens/request** (−35 %) |
-| Compaction trigger | 20k below the window edge | 70k tokens, configurable |
-| Tool schema payload | 4 447 tokens | 3 631 tokens |
+| | before this work | now |
+|---|---:|---:|
+| System prompt | ~20,900 B (~5,200 tok) | **9,629 B (2,408 tok)** |
+| Tool definitions (coder set) | 17,855 B (4,333 tok) | **8,738 B (2,184 tok)**, and bounded by a test |
+| Installed skills in the prompt | 7,285 B | **1,965 B** (297 skills installed) |
+| First request total | — | **4,687 tokens** |
+| One `bash` result ceiling | 30,000 chars (~7,500 tok) | **4,000 chars (~1,000 tok)**, rest spilled to a file |
+| One `view` read | 200 KB, 200 lines default | **32 KB, 80 lines default** |
+| Compaction trigger / target | 70k / 70k (lands on the trigger) | **180k / 90k** |
+| Compaction itself | model call, 30–40 s | **local, milliseconds** |
+| Prompt prefix kept across turns | 31% with tool results | **100%** |
 
-Where the system-prompt saving comes from, in order of size: skill descriptions
-are no longer inlined (a bounded index plus a `fetch_skill` loader), the static
-guidance sections were rewritten at a third of their length, and the repository
-guide is a page instead of six.
+Two independent things drive cost: the fixed prompt sent every round, and the
+number of rounds. The first is now about 4.6k tokens. The second is handled by
+caching: providers reuse an identical prefix from the first token at roughly a
+tenth of the price, so compaction is now a rare fallback rather than a routine
+event and nothing rewrites an older message just to make it shorter.
 
 ## What else changed
 
-- **Provider connections are pooled.** The default transport keeps two idle
-  connections per host; an agent exceeds that routinely, so requests re-dialled
-  and paid a TLS handshake. One pool is now shared by every provider, sized for
-  an agent.
-- **Tool results no longer block on language servers.** An edit waited up to 5 s
-  for diagnostics and a file read 300 ms; both are sub-second and adaptive. The
-  `diagnostics` tool still waits properly when certainty is asked for.
-- **Compaction runs at the configured threshold**, not only when the window is
-  nearly full, and aged tool output is digested every round rather than at the
-  ceiling.
+- **Compaction is local.** It measures the transcript, keeps a recent verbatim
+  tail and stamps a note. No model call. A note recording what the folded part
+  did (files read, files changed, commands run, errors seen) is assembled
+  locally so the next assistant does not re-read the work. The full transcript
+  stays in the database; compaction only moves where the visible window starts.
+- **The prompt prefix is byte-stable.** Git state rides on the first user turn,
+  governance notes are appended, and duplicate results keep the earliest copy
+  so a later turn never rewrites an earlier message. Digesting runs only when
+  the prompt exceeds the ceiling.
+- **Tool output is capped at source**, with the dropped middle spilled to a file
+  whose path stays in the result. Repeated lines are folded with a count while
+  distinct lines stay verbatim.
+- **Skills load on demand.** A bounded index of 16 described skills plus the
+  `fetch_skill` tool; the loader was previously built but never allowlisted.
+- **Swarms** fan out independent lookups on the small model, with one shared
+  tiny prompt, a read-only tool set, capped findings, no nested workers and a
+  per-worker timeout.
+- **Provider connections are pooled**, so concurrent agent calls do not re-dial
+  and repeat the TLS handshake.
 - **Edits are transactional.** One snapshot, `expect`-guarded line addresses,
   all-or-nothing batches, preserved BOM/line endings/final newline/mode, a
-  read-back hash of what actually landed, and a per-turn journal you can revert.
+  read-back hash, and a per-turn journal you can revert.
 - **No attribution is written.** Commits, issues and pull requests carry no
   "Generated with" line and no co-author trailer.
 - **A turn is governed, not just looped.** Exploration pressure steers a turn
-  that stops making progress, a completion claim with no tool result behind it
-  is refused, and duplicate calls are answered from a per-turn cache.
+  that stops making progress, unsupported completion claims are refused, and
+  duplicate calls are answered from a per-turn cache.
 - **Long sessions keep their memory**: project lessons, a plan whose steps need
   evidence to close, and unfinished work offered back at startup.
 
-Every one of these is a setting under `options` in `crush.json`/`crushrc` —
-`context_reduction`, `governance`, `edit_safety`, `speed`, `leverage` — and every
-default is the measured one.
+Settings live under `options` in `crush.json`/`crushrc`: `context_reduction`,
+`governance`, `edit_safety`, `speed`, `leverage`. Key compaction options:
+
+```bash
+option compaction-trigger-tokens 180000
+option compaction-budget-tokens 90000
+model small <provider>/<fast-model-id>
+```
+
+The `small` model is what swarms run on. Without one configured, Crush falls
+back to a discovered model, which may be the large one.
 
 ## Compatibility
 
@@ -228,8 +249,11 @@ dark defaults, so they stay readable rather than turning into bright-on-bright.
 | | upstream Crush | this fork |
 |---|---|---|
 | Install | package managers, releases | **build from source** via the scripts above |
-| Prompt size | ~39k tokens | **~7k tokens** |
+| First request | — | **4,687 tokens** |
+| Compaction | model summary, 30–40 s | local, milliseconds |
 | Skills in the prompt | every description inlined | bounded index + `fetch_skill` loader |
+| Tool output | unbounded | capped, with a spill pointer |
+| Independent lookups | one agent call each | `swarm` fan-out on the small model |
 | Edits | plain find/replace | transactional, `expect`-guarded, read-back verified |
 | Attribution trailers | on by default | **never written** |
 | Session format | — | compatible both ways |
