@@ -169,9 +169,9 @@
         "tool_result_digest_tokens": {
           "type": "integer",
           "description": "Tool result size in tokens above which old results are digested",
-          "default": 1024,
+          "default": 512,
           "examples": [
-            512
+            1024
           ]
         },
         "protect_errors": {

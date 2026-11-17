@@ -1003,7 +1003,7 @@ type ContextReductionOptions struct {
 	ResponseReserveTokens *int `json:"response_reserve_tokens,omitempty" jsonschema:"description=Tokens reserved for the model answer when sizing a compacted prompt,default=8192,example=16000"`
 	// ToolResultDigestTokens is the size above which an aged tool result
 	// body is replaced by a digest stub.
-	ToolResultDigestTokens *int `json:"tool_result_digest_tokens,omitempty" jsonschema:"description=Tool result size in tokens above which old results are digested,default=1024,example=512"`
+	ToolResultDigestTokens *int `json:"tool_result_digest_tokens,omitempty" jsonschema:"description=Tool result size in tokens above which old results are digested,default=512,example=1024"`
 	// ProtectErrors keeps failed tool results verbatim, never digested.
 	ProtectErrors *bool `json:"protect_errors,omitempty" jsonschema:"description=Never digest failed tool results,default=true"`
 	// ReadPointerStubs replaces a re-read of an unchanged file with a
