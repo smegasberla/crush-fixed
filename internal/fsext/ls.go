@@ -267,8 +267,25 @@ func (dl *directoryLister) shouldIgnore(path string, ignorePatterns []string, is
 	return false
 }
 
+// ListOptions tunes what a directory listing drops.
+type ListOptions struct {
+	// KeepIgnoredFiles lists files that .gitignore (or the global ignores)
+	// exclude, while still pruning ignored directories. It is for surfaces
+	// where the user names a file by hand: an ignored file is often exactly
+	// the one they want, and leaving it out of an @ completion makes it
+	// impossible to reference. Directory pruning stays on, because an
+	// ignored tree (node_modules, build output) is what makes a walk
+	// expensive rather than merely long.
+	KeepIgnoredFiles bool
+}
+
 // ListDirectory lists files and directories in the specified path.
 func ListDirectory(initialPath string, ignorePatterns []string, depth, limit int) ([]string, bool, error) {
+	return ListDirectoryWithOptions(initialPath, ignorePatterns, depth, limit, ListOptions{})
+}
+
+// ListDirectoryWithOptions lists files and directories honouring opts.
+func ListDirectoryWithOptions(initialPath string, ignorePatterns []string, depth, limit int, opts ListOptions) ([]string, bool, error) {
 	found := csync.NewSlice[string]()
 	dl := NewDirectoryLister(initialPath)
 
@@ -281,6 +298,7 @@ func ListDirectory(initialPath string, ignorePatterns []string, depth, limit int
 		MaxDepth: depth,
 	}
 
+	hitLimit := false
 	err := fastwalk.Walk(&conf, initialPath, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return nil // Skip files we don't have permission to access
@@ -291,7 +309,12 @@ func ListDirectory(initialPath string, ignorePatterns []string, depth, limit int
 			if isDir {
 				return filepath.SkipDir
 			}
-			return nil
+			// An ignored file is still nameable when the caller asks for it:
+			// the whole point of naming a path by hand is that the tool rules
+			// would not have picked it.
+			if !opts.KeepIgnoredFiles {
+				return nil
+			}
 		}
 
 		if path != initialPath {
@@ -302,6 +325,10 @@ func ListDirectory(initialPath string, ignorePatterns []string, depth, limit int
 		}
 
 		if limit > 0 && found.Len() >= limit {
+			// Recorded explicitly rather than inferred from the walk's error:
+			// fastwalk does not report SkipAll as an error on every path, so
+			// relying on it made a truncated listing claim it was complete.
+			hitLimit = true
 			return filepath.SkipAll
 		}
 
@@ -312,5 +339,5 @@ func ListDirectory(initialPath string, ignorePatterns []string, depth, limit int
 	}
 
 	matches, truncated := truncate(slices.Collect(found.Seq()), limit)
-	return matches, truncated || errors.Is(err, filepath.SkipAll), nil
+	return matches, truncated || hitLimit, nil
 }

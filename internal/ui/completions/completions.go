@@ -416,7 +416,12 @@ func (c *Completions) Render() string {
 // loadFiles lists the files under the working directory, with the open ones
 // that are listed first, in the order given.
 func loadFiles(depth, limit int, open []string) []FileCompletionValue {
-	files, _, _ := fsext.ListDirectory(".", nil, depth, limit)
+	// Keep ignored files: an @ completion is how the user names a path by
+	// hand, so a .gitignore rule must not make a file unmentionable. Ignored
+	// directories are still pruned, which is where the walk cost lives.
+	files, _, _ := fsext.ListDirectoryWithOptions(".", nil, depth, limit, fsext.ListOptions{
+		KeepIgnoredFiles: true,
+	})
 	slices.Sort(files)
 	for i, file := range files {
 		files[i] = filepath.ToSlash(filepath.Clean(file))

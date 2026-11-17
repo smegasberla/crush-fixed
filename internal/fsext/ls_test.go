@@ -1,6 +1,7 @@
 package fsext
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -57,4 +58,56 @@ func relPaths(tb testing.TB, in []string, base string) []string {
 		out = append(out, filepath.ToSlash(rel))
 	}
 	return out
+}
+
+// TestListDirectoryReportsTruncation covers a listing that hit its cap: it must
+// say so. The flag used to be inferred from the walk's error, which fastwalk
+// does not always report for SkipAll, so a listing cut short claimed to be
+// complete and callers had no way to know files were missing.
+func TestListDirectoryReportsTruncation(t *testing.T) {
+	t.Parallel()
+
+	tmp := t.TempDir()
+	for i := range 20 {
+		name := filepath.Join(tmp, fmt.Sprintf("file%02d.go", i))
+		require.NoError(t, os.WriteFile(name, []byte("x"), 0o644))
+	}
+
+	files, truncated, err := ListDirectory(tmp, nil, 0, 5)
+	require.NoError(t, err)
+	require.Len(t, files, 5)
+	require.True(t, truncated, "a listing cut short must report truncation")
+
+	files, truncated, err = ListDirectory(tmp, nil, 0, 0)
+	require.NoError(t, err)
+	require.Len(t, files, 20)
+	require.False(t, truncated, "an unlimited listing of a small directory is complete")
+}
+
+// TestListDirectoryCanKeepIgnoredFiles covers the @ completion path. A file the
+// user names by hand is often one the repository ignores (.env, a scratch doc),
+// and dropping it from the list makes it impossible to reference at all.
+func TestListDirectoryCanKeepIgnoredFiles(t *testing.T) {
+	t.Parallel()
+
+	tmp := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(tmp, ".gitignore"), []byte("*.md\nnode_modules/\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(tmp, "CHASER.md"), []byte("x"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(tmp, "keep.go"), []byte("x"), 0o644))
+	require.NoError(t, os.MkdirAll(filepath.Join(tmp, "node_modules"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(tmp, "node_modules", "dep.js"), []byte("x"), 0o644))
+
+	// The default listing is what a scanning tool wants: ignored paths gone.
+	files, _, err := ListDirectory(tmp, nil, 0, 0)
+	require.NoError(t, err)
+	require.NotContains(t, relPaths(t, files, tmp), "CHASER.md")
+
+	// Naming a file by hand is different: the ignored file is listed, while
+	// the ignored directory tree is still pruned so the walk stays cheap.
+	files, _, err = ListDirectoryWithOptions(tmp, nil, 0, 0, ListOptions{KeepIgnoredFiles: true})
+	require.NoError(t, err)
+	got := relPaths(t, files, tmp)
+	require.Contains(t, got, "CHASER.md", "an ignored file must still be nameable")
+	require.Contains(t, got, "keep.go")
+	require.NotContains(t, got, "node_modules/dep.js", "ignored directories stay pruned")
 }
