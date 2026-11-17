@@ -87,3 +87,25 @@ func TestCompactionWithHugeRecentResultsStaysNearBudget(t *testing.T) {
 	require.LessOrEqual(t, Summarize("", fitted).Total(), opts.BudgetTokens,
 		"the built prompt must land near the configured budget")
 }
+
+// TestHugeRecentResultsAreBoundedByBudget checks a 1M-token window cannot let
+// a 90K budget send 100K+ tokens. The window ceiling used to win over the
+// budget, so enormous tool results in the recent tail passed through.
+func TestHugeRecentResultsAreBoundedByBudget(t *testing.T) {
+	t.Parallel()
+
+	msgs := hugeTail()
+	before := Summarize("", msgs).Total()
+	require.Greater(t, before, 150_000)
+
+	// This is the bound repack now applies: the smaller of the model window
+	// ceiling and the user's compaction budget.
+	ceiling := 900_000 * 9 / 10
+	budget := 90_000
+	limit := min(ceiling, budget)
+
+	fitted, changed := FitTailToBudget(msgs, limit)
+	require.True(t, changed)
+	require.LessOrEqual(t, Summarize("", fitted).Total(), budget,
+		"one edit's results must not cost 100K tokens under a 90K budget")
+}

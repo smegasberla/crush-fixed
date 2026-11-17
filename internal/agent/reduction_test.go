@@ -117,7 +117,8 @@ func TestRepackNoOpWithinCeiling(t *testing.T) {
 	require.Equal(t, messages, out)
 	require.Equal(t, outcome.Before, outcome.After)
 	require.Zero(t, outcome.Digested)
-	require.Equal(t, 180000, outcome.Ceiling, "the safety percentage applies to the advertised window")
+	require.Equal(t, config.DefaultCompactionBudgetTokens, outcome.Ceiling,
+		"the configured budget caps the ceiling even on a large advertised window")
 	require.Equal(t, 4, outcome.Before)
 }
 

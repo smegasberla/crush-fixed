@@ -1429,6 +1429,20 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 				// that is already part of that prompt on the next round, so
 				// the trigger fired early and at an unpredictable size.
 				tokens := currentSession.PromptTokens
+				// Provider usage can be reported late or in a different unit
+				// (some gateways report only the uncached remainder), so a
+				// transcript can pass this check while already far over the
+				// trigger. Measure the prompt locally as a second signal.
+				if a.reduction.enabled() {
+					// The reduction pass bounds what is sent, so the trigger
+					// has to look at the unreduced transcript. `msgs` is
+					// already loaded for this turn; no extra I/O.
+					if raw, _ := a.preparePrompt(msgs, false, false); len(raw) > 0 {
+						if local := int64(promptTokens(raw)); local > tokens {
+							tokens = local
+						}
+					}
+				}
 
 				// The configured trigger wins when it is set, because it is
 				// the number the user chose for cost, not just for survival.

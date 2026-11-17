@@ -207,6 +207,13 @@ func (r *reductionState) repack(system string, messages []fantasy.Message, adver
 	if ceiling <= 0 {
 		ceiling = int(float64(r.settings.GetCompactionTriggerTokens()) * float64(r.settings.GetCeilingSafetyPercent()) / 100)
 	}
+	// A large advertised window (1M on some models) makes a 90% ceiling
+	// meaningless: the transcript was allowed to reach 900K before anything
+	// trimmed it. The configured compaction budget is the cost the user chose,
+	// so it is also the hard per-request ceiling.
+	if budget := r.settings.GetCompactionBudgetTokens(); budget > 0 && budget < ceiling {
+		ceiling = budget
+	}
 	outcome.Ceiling = ceiling
 	outcome.Before = contextreduction.Summarize(system, messages).Total()
 	outcome.After = outcome.Before
@@ -231,14 +238,29 @@ func (r *reductionState) repack(system string, messages []fantasy.Message, adver
 		outcome.After = contextreduction.Summarize(system, out).Total()
 	}
 
+	// A recent tail made of one or two enormous tool results can exceed the
+	// budget on its own, so no amount of dropping older messages helps.
+	// Bound those results to addressable stubs before the final drop.
+	//
+	// This runs above the compaction budget, not only above the survival
+	// ceiling: a compaction that folds 180K to 90K must actually send about
+	// 90K. Using the ceiling here let a post-compaction request carry two
+	// huge results for ~100K tokens until the next trigger fired.
+	budget := r.settings.GetCompactionBudgetTokens()
+	if budget <= 0 || budget > ceiling {
+		budget = ceiling
+	}
+	if outcome.Before > budget {
+		var changed bool
+		out, changed = contextreduction.FitTailToBudget(out, budget)
+		if changed {
+			outcome.After = contextreduction.Summarize(system, out).Total()
+		}
+	}
+
 	if outcome.Before <= ceiling {
 		return out, outcome
 	}
-
-	// A recent tail made of one or two enormous tool results can exceed the
-	// ceiling on its own, so no amount of dropping older messages helps.
-	// Bound those results to addressable stubs before the final drop.
-	out, _ = contextreduction.FitTailToBudget(out, ceiling)
 
 	// Whole messages, front first, once the cheap stages were not enough.
 	out, dropped := dropOldestToCeiling(system, out, ceiling)
