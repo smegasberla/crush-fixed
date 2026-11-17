@@ -105,6 +105,12 @@ type SessionAgentCall struct {
 	// session Run returns ErrSessionIdle instead of starting one.
 	QueueOnly bool
 	Prompt    string
+	// Continuation marks a turn re-queued because a compaction cut the
+	// previous one short. Its prompt is already in the transcript, so it must
+	// not be stored again: a stored copy is history the model re-sends on
+	// every later request, and repeating the user's words back at them reads
+	// as a second message they never wrote.
+	Continuation bool
 	// Report is a subagent report this call delivers. It is written to
 	// the transcript only when delivered, so it lands where the model
 	// reads it. Prompt is still what the model reads for it.
@@ -1022,9 +1028,10 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 	if firstTurn {
 		modelContext += a.gitStatusContext(ctx)
 	}
-	_, err = a.createUserMessage(ctx, call, modelContext)
-	if err != nil {
-		return nil, err
+	if !call.Continuation {
+		if _, err = a.createUserMessage(ctx, call, modelContext); err != nil {
+			return nil, err
+		}
 	}
 	userMsgCreated = true
 
@@ -1610,6 +1617,10 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 			//
 			// The queued turn is not the report, so it must not re-deliver one.
 			call.Report = nil
+			// Its prompt is already in the transcript. Storing it again would
+			// show the user their own words a second time and pay for the copy
+			// on every later request.
+			call.Continuation = true
 			a.messageQueue.Set(call.SessionID, append(existing, call))
 			continued = true
 		}

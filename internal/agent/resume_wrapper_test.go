@@ -80,3 +80,36 @@ func TestCompactionContinuationDoesNotWrapThePrompt(t *testing.T) {
 	require.True(t, strings.HasPrefix(
 		fmt.Sprintf("%sContinue`", interruptedPromptPrefix), resumeWrapperMarker))
 }
+
+// TestContinuationDoesNotStoreThePromptAgain is the regression guard for a
+// resumed turn repeating the user's own words. A compaction re-queues the turn,
+// and Run used to store its prompt as a new user message, so the user saw their
+// prompt twice and every later request paid for the second copy.
+func TestContinuationDoesNotStoreThePromptAgain(t *testing.T) {
+	t.Parallel()
+
+	env := testEnv(t)
+	sa := testSessionAgent(env, &recordingStreamModel{text: ""}, &finishStreamModel{text: "t"}, "sys").(*sessionAgent)
+
+	ctx := t.Context()
+	sess, err := env.sessions.Create(ctx, "session")
+	require.NoError(t, err)
+
+	_, err = sa.Run(ctx, SessionAgentCall{SessionID: sess.ID, Prompt: "Continue"})
+	require.NoError(t, err)
+
+	// The resumed turn: same words, already in the transcript.
+	_, err = sa.Run(ctx, SessionAgentCall{SessionID: sess.ID, Prompt: "Continue", Continuation: true})
+	require.NoError(t, err)
+
+	all, err := env.messages.List(ctx, sess.ID)
+	require.NoError(t, err)
+
+	copies := 0
+	for _, m := range all {
+		if m.Role == message.User && m.Content().Text == "Continue" {
+			copies++
+		}
+	}
+	require.Equal(t, 1, copies, "a resumed turn must not store the prompt a second time")
+}
