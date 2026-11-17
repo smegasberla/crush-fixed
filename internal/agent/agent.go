@@ -75,6 +75,9 @@ const providerStoppedTurnMessage = "Provider stopped the response"
 //go:embed templates/title.md
 var titlePrompt []byte
 
+// summaryPrompt is the background digest's instructions for writing a
+// continuation brief. Compaction does not use it: compaction is local.
+//
 //go:embed templates/summary.md
 var summaryPrompt []byte
 
@@ -319,6 +322,33 @@ type sessionAgent struct {
 	leverage *leverageState
 	// workingDir is the root an expected edit path is resolved against.
 	workingDir string
+	// compactions records the most recent compaction per session, so the UI
+	// can report what it folded and what it saved.
+	compactions compactionLog
+}
+
+// compactionLog keeps the last compaction of each session.
+type compactionLog struct {
+	mu      sync.Mutex
+	records map[string]compactionRecord
+}
+
+// record stores a session's latest compaction.
+func (l *compactionLog) record(rec compactionRecord) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.records == nil {
+		l.records = make(map[string]compactionRecord)
+	}
+	l.records[rec.SessionID] = rec
+}
+
+// get returns a session's latest compaction, if it has been compacted.
+func (l *compactionLog) get(sessionID string) (compactionRecord, bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	rec, ok := l.records[sessionID]
+	return rec, ok
 }
 
 type SessionAgentOptions struct {
@@ -1778,9 +1808,22 @@ func (a *sessionAgent) Summarize(ctx context.Context, sessionID string, opts fan
 	return a.summarize(ctx, sessionID, compactTriggerManual, opts, onAuthRefresh)
 }
 
+// summarize compacts the session so the next request fits. It is deliberately
+// local: measuring the transcript, choosing a recent tail and stamping a note
+// costs microseconds, while asking a model to write the summary costs a full
+// round-trip over the very transcript that is too large to send.
+//
+// The transcript is not modified. A compaction records where the visible
+// history now starts, so every message stays in the database and the fold is
+// reversible; the UI can still scroll back through what was folded.
+//
+// A continuation brief is reused when a previous fold already wrote one for
+// this prefix, but it is never generated here. Producing one is a background
+// job: paying for it inside a turn would reintroduce exactly the stall this
+// path exists to avoid.
 func (a *sessionAgent) summarize(ctx context.Context, sessionID, trigger string, opts fantasy.ProviderOptions, onAuthRefresh func(context.Context, *fantasy.ProviderError) error) error {
-	largeModel := a.models().Large
-	systemPromptPrefix := a.systemPromptPrefix.Get()
+	_ = opts
+	_ = onAuthRefresh
 
 	currentSession, err := a.sessions.Get(ctx, sessionID)
 	if err != nil {
@@ -1791,7 +1834,6 @@ func (a *sessionAgent) summarize(ctx context.Context, sessionID, trigger string,
 		return err
 	}
 	if len(msgs) == 0 {
-		// Nothing to summarize.
 		return nil
 	}
 
@@ -1799,203 +1841,81 @@ func (a *sessionAgent) summarize(ctx context.Context, sessionID, trigger string,
 		return fmt.Errorf("%w: %s", ErrCompactionBlocked, pre.Reason)
 	}
 
-	// A previous compaction already folded everything up to and including its
-	// summary message into a continuation brief. Re-summarizing that prefix
-	// re-derives facts the brief already states, and it is the largest prompt
-	// this path ever sends, so the brief is carried forward verbatim and only
-	// the delta after it is summarized.
-	absorbed, previousBrief, chainPrefix := 0, "", ""
-	deltaMsgs := msgs
-	if absorbed = absorbedPrefix(msgs, currentSession.SummaryMessageID); absorbed > 0 {
-		previousBrief = strings.TrimSpace(msgs[absorbed-1].Content().Text)
-		chainPrefix = chainFor("", []fantasy.Message{fantasy.NewUserMessage(previousBrief)})
-		deltaMsgs = msgs[absorbed:]
-		if len(deltaMsgs) == 0 {
-			// The transcript has not moved since the last compaction, so the
-			// existing brief already covers every message here. Summarizing
-			// again would spend a full prompt to reproduce it.
-			slog.Info("Skipping compaction; the existing brief covers the transcript",
-				"session_id", sessionID, "absorbed_messages", absorbed)
-			return nil
-		}
-	}
+	// The tail a compaction keeps is measured on the same message shape the
+	// next request sends, so the size the planner compares against the window
+	// is the size the provider will see.
+	aiMsgs, _ := a.preparePrompt(msgs, false, false)
 
-	aiMsgs, _ := a.preparePrompt(deltaMsgs, largeModel.CatwalkCfg.Capabilities.Vision, largeModel.CatwalkCfg.Capabilities.Audio)
-
-	// The summarizer is itself a model call. Sending it a prompt that no
-	// longer fits would fail the compaction for the same reason the turn did,
-	// so the same planner bounds what it reads: the digested tail plus a
-	// budget for the summary it will write.
-	//
-	// The chain hash of the folded prefix keys the memo, so re-running
-	// compaction over an unchanged prefix is free and a new brief extends the
-	// previous one instead of re-summarising the whole transcript.
-	foldedFor := aiMsgs
+	brief := ""
 	if a.reduction.enabled() {
-		var plan contextreduction.Plan
-		foldedFor, plan = contextreduction.Compact(
-			string(summaryPrompt),
-			aiMsgs,
-			a.reduction.settings.GetCompactionSummaryTokens(),
-			a.reduction.compactOptions(),
-		)
-		if plan.Compact {
-			aiMsgs = foldedFor
-			slog.Info("Compaction bounded the transcript it summarizes",
-				"session_id", sessionID,
-				"dropped_messages", plan.DroppedMessages,
-				"kept_messages", plan.KeptMessages,
-				"tokens_before", plan.Total,
-				"budget", plan.Budget)
-		}
+		// A brief for this exact prefix may already exist from an earlier
+		// fold. Reusing it keeps the invariants the earliest turns
+		// established; generating one waits for the background digest.
+		brief = a.reduction.briefFor(aiMsgs)
 	}
 
-	genCtx, cancel := context.WithCancel(ctx)
-	ac := &activeCancel{cancel: cancel}
-	a.activeRequests.Set(sessionID, ac)
-	defer a.activeRequests.CompareAndDelete(sessionID, ac)
-	defer cancel()
-	defer func() {
-		if flushErr := a.messages.FlushAll(ctx); flushErr != nil {
-			slog.Error("Failed to flush pending message updates after summarize", "error", flushErr)
-		}
-	}()
-
-	agent := fantasy.NewAgent(
-		largeModel.Model,
-		fantasy.WithSystemPrompt(string(summaryPrompt)),
-		fantasy.WithUserAgent(userAgent),
-	)
-	summaryMessage, err := a.messages.Create(ctx, sessionID, message.CreateMessageParams{
-		Role:             message.Assistant,
-		Model:            largeModel.ModelCfg.Model,
-		ModelName:        a.modelDisplayName(largeModel.ModelCfg),
-		Provider:         largeModel.ModelCfg.Provider,
-		IsSummaryMessage: true,
-	})
-	if err != nil {
-		return err
-	}
-
-	// A brief for exactly this prefix may already exist: the chain hash covers
-	// every byte the summary would absorb, so a hit is proof the work is done.
-	// Reusing it costs one file read instead of a model call, and its
-	// constraints are carried into the new brief so the earliest turns still
-	// reach the next assistant. The chain continues the absorbed prefix's
-	// hash, so a memo written for an earlier fold is a different chain.
-	chain := ""
+	compactOpts := a.reduction.compactOptions()
+	var plan contextreduction.Plan
 	if a.reduction.enabled() {
-		chain = chainFor(chainPrefix, foldedFor)
-		if brief, ok := a.reduction.summaryFor(chain); ok {
-			// A memo for this exact chain already merged the carried brief
-			// with this delta, so it supersedes it.
-			previousBrief = brief
-			slog.Info("Reusing a continuation brief", "session_id", sessionID, "chars", len(brief))
-		}
+		_, plan = contextreduction.CompactLocally("", aiMsgs, brief, compactOpts)
+	} else {
+		plan = contextreduction.Plan{Reason: "context reduction disabled"}
 	}
-	summaryPromptText := buildContinuationPrompt(currentSession.Todos, previousBrief)
+	if !plan.Compact {
+		// Nothing to fold, but the compaction still ran: the hooks fire so a
+		// script that relies on them sees the attempt, as it always has.
+		slog.Info("Compaction found nothing to fold",
+			"session_id", sessionID, "reason", plan.Reason, "tokens", plan.Total)
+		a.hooks.Run(ctx, hooks.Event{Name: hooks.EventPostCompact, SessionID: sessionID, Trigger: trigger})
+		return nil
+	}
 
-	resp, err := agent.Stream(genCtx, fantasy.AgentStreamCall{
-		Prompt:          summaryPromptText,
-		Messages:        aiMsgs,
-		Headers:         sessionHeaders(sessionID),
-		ProviderOptions: opts,
-		OnAuthRefresh:   onAuthRefresh,
-		ModelProvider: func() fantasy.LanguageModel {
-			return a.currentBuildOf(largeModel)
-		},
-		PrepareStep: func(callContext context.Context, options fantasy.PrepareStepFunctionOptions) (_ context.Context, prepared fantasy.PrepareStepResult, err error) {
-			prepared.Messages = options.Messages
-			if systemPromptPrefix != "" {
-				prepared.Messages = append([]fantasy.Message{fantasy.NewSystemMessage(systemPromptPrefix)}, prepared.Messages...)
-			}
-			return callContext, prepared, nil
-		},
-		OnReasoningDelta: func(id string, text string) error {
-			summaryMessage.AppendReasoningContent(text)
-			return a.messages.Update(genCtx, summaryMessage)
-		},
-		OnReasoningEnd: func(id string, reasoning fantasy.ReasoningContent) error {
-			// Handle anthropic signature.
-			if anthropicData, ok := reasoning.ProviderMetadata["anthropic"]; ok {
-				if signature, ok := anthropicData.(*anthropic.ReasoningOptionMetadata); ok && signature.Signature != "" {
-					summaryMessage.AppendReasoningSignature(signature.Signature)
-				}
-			}
-			summaryMessage.FinishThinking()
-			return a.messages.Update(genCtx, summaryMessage)
-		},
-		OnTextDelta: func(id, text string) error {
-			summaryMessage.AppendContent(text)
-			return a.messages.Update(genCtx, summaryMessage)
-		},
+	// plan indexes the prompt shape, which prepends a reminder message, so
+	// the kept count is what maps back to the stored transcript. Taking it
+	// from the end is also what keeps the newest work: a tail is the recent
+	// conversation, never an older slice of it.
+	kept := min(plan.KeptMessages, len(msgs))
+	if kept <= 0 || kept >= len(msgs) {
+		return nil
+	}
+
+	// The marker is the first kept message, and the note that explains the
+	// fold is memoized against it. Nothing is deleted: the window moved, the
+	// history did not.
+	marker := msgs[len(msgs)-kept]
+	note := contextreduction.SummaryNote(brief, len(msgs)-kept, kept)
+	if a.reduction.enabled() {
+		a.reduction.rememberNote(marker.ID, note)
+	}
+
+	builtTokens := contextreduction.Summarize("", aiMsgs[plan.TailStart:]).Total()
+	a.compactions.record(compactionRecord{
+		SessionID:       sessionID,
+		Trigger:         trigger,
+		OriginalTokens:  plan.Total,
+		BuiltTokens:     builtTokens,
+		BudgetTokens:    plan.Budget,
+		ReserveTokens:   plan.Reserve,
+		KeptMessages:    kept,
+		DroppedMessages: len(msgs) - kept,
+		ReusedBrief:     brief != "",
 	})
-	if err != nil {
-		isCancelErr := errors.Is(err, context.Canceled)
-		if isCancelErr {
-			// User cancelled summarize we need to remove the summary message.
-			deleteErr := a.messages.Delete(ctx, summaryMessage.ID)
-			return deleteErr
-		}
-		// Mark the summary message as finished with an error so the UI
-		// stops spinning.
-		summaryMessage.AddFinish(message.FinishReasonError, "Summarization Error", err.Error())
-		if updateErr := a.messages.Update(ctx, summaryMessage); updateErr != nil {
-			return updateErr
-		}
-		return err
-	}
 
-	var overrideCost *float64
-	for _, step := range resp.Steps {
-		summaryMessage.PrismModelID, summaryMessage.PrismModelName = extractPrismModel(step.ProviderMetadata)
-		summaryMessage.PrismHypercreditSavings, summaryMessage.PrismDollarSavings = extractPrismSavings(step.ProviderMetadata)
-		stepCost := a.openrouterCost(step.ProviderMetadata)
-		if stepCost != nil {
-			newCost := *stepCost
-			if overrideCost != nil {
-				newCost += *overrideCost
-			}
-			overrideCost = &newCost
-		}
-	}
-	if hyperCost := a.hyperStepsCost(largeModel, resp.Steps); hyperCost != nil {
-		overrideCost = hyperCost
-	}
+	slog.Info("Compacted the session locally",
+		"session_id", sessionID,
+		"trigger", trigger,
+		"tokens_before", plan.Total,
+		"tokens_after", builtTokens,
+		"dropped_messages", len(msgs)-kept,
+		"kept_messages", kept,
+		"budget", plan.Budget,
+		"reused_brief", brief != "")
 
-	// A compaction summary that stopped short is the record the session
-	// goes on reading from, so record and log why it is incomplete
-	// rather than filing it under a clean end_turn. Unknown finishes
-	// (providers that never report one) keep the historical end_turn.
-	finishReason, finishMessage, finishDetails := turnFinish(largeModel, sessionID, resp.Response.FinishReason)
-	if finishReason == message.FinishReasonUnknown {
-		finishReason = message.FinishReasonEndTurn
-	}
-	summaryMessage.AddFinish(finishReason, finishMessage, finishDetails)
-	err = a.messages.Update(genCtx, summaryMessage)
-	if err != nil {
-		return err
-	}
-
-	// Memoize the brief so a rebuild over the same prefix costs nothing. The
-	// chain covers exactly the messages this summary absorbed: the carried
-	// brief plus this delta, which together are the whole transcript.
-	if a.reduction.enabled() && chain != "" {
-		if brief := summaryMessage.Content().Text; brief != "" {
-			a.reduction.rememberSummary(chain, len(msgs), brief)
-		}
-	}
-
-	a.updateSessionUsage(largeModel, &currentSession, resp.TotalUsage, overrideCost, false)
-
-	// Just in case, get just the last usage info.
-	usage := resp.Response.Usage
-	currentSession.SummaryMessageID = summaryMessage.ID
-	currentSession.CompletionTokens = summaryCompletionTokens(usage, summaryMessage)
+	currentSession.SummaryMessageID = marker.ID
 	currentSession.PromptTokens = 0
-	currentSession.EstimatedUsage = usageIsZero(usage)
-	_, err = a.sessions.Save(genCtx, currentSession)
-	if err != nil {
+	currentSession.CompletionTokens = 0
+	currentSession.EstimatedUsage = true
+	if _, err := a.sessions.Save(ctx, currentSession); err != nil {
 		return err
 	}
 	a.hooks.Run(ctx, hooks.Event{Name: hooks.EventPostCompact, SessionID: sessionID, Trigger: trigger})
@@ -2003,9 +1923,7 @@ func (a *sessionAgent) summarize(ctx context.Context, sessionID, trigger string,
 	// Release the active request before processing queued messages so that
 	// Run() does not see the session as busy.
 	a.activeRequests.Del(sessionID)
-	cancel()
 
-	// Process any messages that were queued while summarizing.
 	queuedMessages, ok := a.messageQueue.Get(sessionID)
 	if !ok || len(queuedMessages) == 0 {
 		return nil
@@ -2240,6 +2158,8 @@ func (a *sessionAgent) getSessionMessages(ctx context.Context, session session.S
 	}
 
 	if session.SummaryMessageID != "" {
+		// The marker is the first message of the kept tail; the note that
+		// explains the fold is prepended after slicing (see compactionNote).
 		summaryMsgIndex := -1
 		for i, msg := range msgs {
 			if msg.ID == session.SummaryMessageID {
@@ -2249,10 +2169,40 @@ func (a *sessionAgent) getSessionMessages(ctx context.Context, session session.S
 		}
 		if summaryMsgIndex != -1 {
 			msgs = msgs[summaryMsgIndex:]
-			msgs[0].Role = message.User
+		}
+		// The note that opens the window is prepended here rather than stored:
+		// the transcript is read in time order, so a stored note would sort
+		// after the tail it has to precede. This is the shape a compacted
+		// request builds, and it is assembled fresh on every read.
+		if note := a.compactionNote(session.ID, session.SummaryMessageID); note != "" {
+			msgs = append([]message.Message{{
+				ID:               compactionNoteID,
+				SessionID:        session.ID,
+				Role:             message.User,
+				CreatedAt:        msgs[0].CreatedAt,
+				IsSummaryMessage: true,
+				Parts:            []message.ContentPart{message.TextContent{Text: note}},
+			}}, msgs...)
 		}
 	}
 	return msgs, nil
+}
+
+// compactionNoteID is the synthetic id of the note that opens a compacted
+// window. It is never written to the database.
+const compactionNoteID = "compaction-note"
+
+// compactionNote returns the note that opens a compacted window, or "" when the
+// session was never compacted. It is the summary half of the payload a
+// compacted request builds: system prompt, this note, then the kept tail.
+func (a *sessionAgent) compactionNote(sessionID, summaryMessageID string) string {
+	if summaryMessageID == "" {
+		return ""
+	}
+	if note, ok := a.reduction.noteFor(summaryMessageID); ok {
+		return note
+	}
+	return ""
 }
 
 // hasUserTextMessage reports whether any user message in msgs contains
@@ -2912,7 +2862,9 @@ func (a *sessionAgent) workaroundProviderMediaLimitations(messages []fantasy.Mes
 	return convertedMessages
 }
 
-// buildSummaryPrompt constructs the prompt text for session summarization.
+// buildSummaryPrompt constructs the prompt the background digest uses to write
+// a continuation brief. It is not on the compaction path: compaction is local
+// and never asks a model to write anything.
 func buildSummaryPrompt(todos []session.Todo) string {
 	return buildContinuationPrompt(todos, "")
 }

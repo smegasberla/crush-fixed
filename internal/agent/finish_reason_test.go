@@ -37,34 +37,30 @@ func (m *finishReasonModel) Stream(context.Context, fantasy.Call) (fantasy.Strea
 	}, nil
 }
 
-// TestSummarizeRecordsTruncatedSummary covers the compaction path:
-// a summary cut off by the token limit becomes the record the session
-// reads from afterwards, so it must not be filed under a clean
-// end_turn.
-func TestSummarizeRecordsTruncatedSummary(t *testing.T) {
+// TestCompactionLeavesNoSummaryMessage covers the local compaction path: the
+// note that explains the fold is assembled into the request, not stored as a
+// message, so compaction adds nothing to the transcript and a turn's finish
+// reason is never rewritten by it.
+func TestCompactionLeavesNoSummaryMessage(t *testing.T) {
 	t.Parallel()
 	env := testEnv(t)
-	large := &finishReasonModel{finishStreamModel: finishStreamModel{text: "a summary that stops"}, reason: fantasy.FinishReasonLength}
+	large := &finishReasonModel{finishStreamModel: finishStreamModel{text: "a reply"}, reason: fantasy.FinishReasonLength}
 	small := &finishStreamModel{text: "title"}
 	sa := testSessionAgent(env, large, small, "system").(*sessionAgent)
 
 	sess, err := env.sessions.Create(t.Context(), "session")
 	require.NoError(t, err)
-	_, err = sa.Run(t.Context(), SessionAgentCall{SessionID: sess.ID, Prompt: "hi"})
+	ctx := t.Context()
+	_, err = sa.Run(ctx, SessionAgentCall{SessionID: sess.ID, Prompt: "hi"})
 	require.NoError(t, err)
-	require.NoError(t, sa.Summarize(t.Context(), sess.ID, nil, nil))
+	require.NoError(t, sa.Summarize(ctx, sess.ID, nil, nil))
 
 	msgs, err := env.messages.List(t.Context(), sess.ID)
 	require.NoError(t, err)
-	var summary *message.Message
-	for i := range msgs {
-		if msgs[i].IsSummaryMessage {
-			summary = &msgs[i]
-		}
+	for _, msg := range msgs {
+		require.False(t, msg.IsSummaryMessage,
+			"compaction must not store a summary message; the note is built per request")
 	}
-	require.NotNil(t, summary, "compaction must leave a summary message")
-	require.Equal(t, message.FinishReasonMaxTokens, summary.FinishReason(),
-		"a truncated summary says so instead of pretending the turn ended")
 }
 
 // TestFinishReasonMapping locks in the OnStepFinish mapping: the

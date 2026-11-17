@@ -199,18 +199,14 @@ func TestUsageCostIncludesEveryTokenBucket(t *testing.T) {
 	require.Equal(t, 300.0, usageCost(pricing, usage))
 }
 
-func TestSummarizeCapturesPrismModel(t *testing.T) {
+// TestCompactionCostsNothing covers the cost side of the local design: a
+// compaction makes no provider call, so it adds no usage and no Prism
+// attribution. There is no summary message to carry either, because the note
+// is assembled into the next request instead of being stored.
+func TestCompactionCostsNothing(t *testing.T) {
 	t.Parallel()
 
-	header := http.Header{}
-	header.Set(hyper.PrismModelIDHeader, "prism-42")
-	header.Set(hyper.PrismModelNameHeader, "GPT-5.2 Codex Max")
-	header.Set(hyper.PrismHypercreditSavingsHeader, "1.5")
-	metadata := &openai.ProviderMetadata{}
-	hyper.HeaderFunc(header, metadata)
-
-	model := &fakePrismLanguageModel{metadata: fantasy.ProviderMetadata{openai.Name: metadata}}
-
+	model := &fakePrismLanguageModel{metadata: fantasy.ProviderMetadata{}}
 	env := testEnv(t)
 	agent := newPrismCostTestAgent(env, model)
 
@@ -224,21 +220,14 @@ func TestSummarizeCapturesPrismModel(t *testing.T) {
 	})
 	require.NoError(t, err)
 
+	before, err := env.sessions.Get(ctx, sess.ID)
+	require.NoError(t, err)
+
 	require.NoError(t, agent.Summarize(ctx, sess.ID, fantasy.ProviderOptions{}, nil))
 
-	updated, err := env.sessions.Get(ctx, sess.ID)
+	after, err := env.sessions.Get(ctx, sess.ID)
 	require.NoError(t, err)
-	require.NotEmpty(t, updated.SummaryMessageID)
-	require.InDelta(t, prismCostTestExpectedCost, updated.Cost, 1e-12)
-
-	summary, err := env.messages.Get(ctx, updated.SummaryMessageID)
-	require.NoError(t, err)
-	require.True(t, summary.IsSummaryMessage)
-	require.Equal(t, "prism-42", summary.PrismModelID)
-	require.Equal(t, "GPT-5.2 Codex Max", summary.PrismModelName)
-	require.NotNil(t, summary.PrismHypercreditSavings)
-	require.Equal(t, 1.5, *summary.PrismHypercreditSavings)
-	require.Nil(t, summary.PrismDollarSavings)
+	require.Equal(t, before.Cost, after.Cost, "a local compaction buys no tokens")
 }
 
 func TestRunUsesPrismRoutedModelCost(t *testing.T) {

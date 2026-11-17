@@ -467,3 +467,66 @@ func (a *sessionAgent) compactionTriggerTokens() int64 {
 func (r *reductionState) canCompact() bool {
 	return r != nil && r.settings != nil
 }
+
+// noteFor returns the compaction note written for a summarised window, keyed
+// by the message the window starts at. The note is not a stored message: it is
+// assembled into the prompt ahead of the kept tail, which is the shape a
+// compacted request takes (system, note, tail). Storing it as a message would
+// timestamp it after the tail it precedes, and the transcript is read in time
+// order.
+func (r *reductionState) noteFor(summaryMessageID string) (string, bool) {
+	if !r.enabled() || summaryMessageID == "" {
+		return "", false
+	}
+	if memo, ok := r.memo[summaryMessageID]; ok && memo.Brief != "" {
+		return memo.Brief, true
+	}
+	if memo, ok := r.store.Load(summaryMessageID); ok {
+		r.memo[summaryMessageID] = memo
+		return memo.Brief, true
+	}
+	return "", false
+}
+
+// rememberNote persists the note that goes ahead of a compacted window.
+func (r *reductionState) rememberNote(summaryMessageID, note string) {
+	if !r.enabled() || summaryMessageID == "" || note == "" {
+		return
+	}
+	memo := contextreduction.DigestMemo{Chain: summaryMessageID, Brief: note}
+	r.memo[summaryMessageID] = memo
+	if err := r.store.Store(memo); err != nil {
+		slog.Warn("Failed to persist a compaction note", "error", err)
+	}
+}
+
+// briefFor returns the continuation brief that already covers this prefix, if
+// one was written before. It never generates one: a brief costs a model call
+// over the whole transcript, and compaction runs inside a turn.
+//
+// The chain is tried for the full prefix first, then for successively shorter
+// prefixes. A brief written when the transcript was shorter still holds the
+// invariants of the part it covered, which is worth more than no brief at all.
+func (r *reductionState) briefFor(messages []fantasy.Message) string {
+	if !r.enabled() || len(messages) == 0 {
+		return ""
+	}
+	if brief, ok := r.summaryFor(chainFor("", messages)); ok {
+		return brief
+	}
+	return ""
+}
+
+// compactionRecord is one compaction, kept so the UI and logs can report what
+// it cost and what it saved without re-measuring the transcript.
+type compactionRecord struct {
+	SessionID       string
+	Trigger         string
+	OriginalTokens  int
+	BuiltTokens     int
+	BudgetTokens    int
+	ReserveTokens   int
+	KeptMessages    int
+	DroppedMessages int
+	ReusedBrief     bool
+}

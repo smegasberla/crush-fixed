@@ -229,3 +229,82 @@ func dropOldest(messages []fantasy.Message, system string, ceiling int) ([]fanta
 	out = append(out, messages[start:]...)
 	return out, start
 }
+
+// CompactLocally builds the prompt a compacted session sends, without a model
+// call. It is the whole point of the design: measuring the transcript, choosing
+// a recent tail that fits the budget and stamping a note costs microseconds,
+// where asking a model to write a summary costs a full round-trip (30-40
+// seconds on a large transcript).
+//
+// The transcript itself is not touched. Compaction chooses where the visible
+// history starts; every message remains in the database, so the decision is
+// reversible and the user can scroll back through what was folded.
+//
+// brief, when non-empty, is a continuation brief already written for an earlier
+// fold. It is placed ahead of the tail so its invariants survive, and it is
+// never generated here: a brief is produced off the critical path and this
+// function only reuses what exists.
+func CompactLocally(system string, messages []fantasy.Message, brief string, opts CompactOptions) ([]fantasy.Message, Plan) {
+	opts = opts.WithDefaults()
+	plan := Plan{
+		Budget:  opts.BudgetTokens,
+		Trigger: opts.TriggerTokens,
+		Reserve: opts.ReserveTokens,
+		Total:   Summarize(system, messages).Total(),
+	}
+	if plan.Total <= opts.TriggerTokens {
+		plan.Reason = "within trigger"
+		plan.KeptMessages = len(messages)
+		return messages, plan
+	}
+
+	// The reserve is held back from the budget so the answer always fits. The
+	// brief and the note are paid for out of what is left, never out of the
+	// reserve: a compaction that eats its own headroom just overflows later.
+	available := opts.BudgetTokens - opts.ReserveTokens
+	if available < 0 {
+		available = 0
+	}
+	if brief != "" {
+		available -= estimateSingle(fantasy.NewUserMessage(brief))
+	}
+	noteTokens := estimateSingle(fantasy.NewUserMessage(SummaryNote("", len(messages), 0)))
+	available -= noteTokens
+	if available < 0 {
+		available = 0
+	}
+
+	// Walk from the newest backwards until the budget cannot hold one more.
+	// The tail is verbatim: compaction drops old context, it never rewrites
+	// what it keeps.
+	used := 0
+	start := len(messages)
+	for i := len(messages) - 1; i >= 0; i-- {
+		size := estimateSingle(messages[i])
+		kept := len(messages) - i
+		if used+size > available && kept > opts.MinTailMessages {
+			break
+		}
+		used += size
+		start = i
+		if opts.MaxTailMessages > 0 && kept >= opts.MaxTailMessages {
+			break
+		}
+	}
+
+	plan.TailStart = start
+	plan.DroppedMessages = start
+	plan.KeptMessages = len(messages) - start
+	if plan.DroppedMessages == 0 {
+		plan.Reason = "nothing left to compact"
+		return messages, plan
+	}
+
+	plan.Compact = true
+	plan.Reason = "prompt over trigger"
+	note := SummaryNote(brief, plan.DroppedMessages, plan.KeptMessages)
+	out := make([]fantasy.Message, 0, plan.KeptMessages+1)
+	out = append(out, fantasy.NewUserMessage(note))
+	out = append(out, messages[start:]...)
+	return out, plan
+}

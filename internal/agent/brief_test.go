@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"charm.land/fantasy"
 	"github.com/charmbracelet/crush/internal/config"
@@ -154,17 +155,17 @@ func TestAbsorbedPrefixStopsAtTheBrief(t *testing.T) {
 		"an unknown summary id must not silently skip the transcript")
 }
 
-// TestDeltaFoldReadsOnlyWhatTheBriefMissed covers the cost of a repeated
-// compaction: the previous brief already states what the folded prefix
-// established, so only the messages after it may be sent to the summarizer.
-func TestDeltaFoldReadsOnlyWhatTheBriefMissed(t *testing.T) {
+// TestCompactionNeverCallsAModel is the whole point of the local design: a
+// compaction is a measurement plus a pointer move, so it must not spend a
+// round-trip over the very transcript that is too large to send.
+func TestCompactionNeverCallsAModel(t *testing.T) {
 	t.Parallel()
 
-	model := &recordingStreamModel{text: "## Established facts\n- the delta was folded"}
+	model := &recordingStreamModel{text: "unused"}
 	env := testEnv(t)
 	sa := testSessionAgent(env, model, &finishStreamModel{text: "title"}, "system").(*sessionAgent)
 	sa.reduction = newReductionState(&ReductionOptions{
-		Settings:  &config.ContextReductionOptions{},
+		Settings:  &config.ContextReductionOptions{CompactionTriggerTokens: intPtr(1), CompactionBudgetTokens: intPtr(1)},
 		DigestDir: t.TempDir(),
 		Provider:  "fake",
 		Model:     "fake-model",
@@ -173,58 +174,96 @@ func TestDeltaFoldReadsOnlyWhatTheBriefMissed(t *testing.T) {
 	ctx := t.Context()
 	sess, err := env.sessions.Create(ctx, "session")
 	require.NoError(t, err)
-
-	// A compaction that already happened: one folded turn plus its brief.
 	_, err = sa.Run(ctx, SessionAgentCall{SessionID: sess.ID, Prompt: "folded earlier"})
 	require.NoError(t, err)
-	require.NoError(t, sa.Summarize(ctx, sess.ID, nil, nil))
+	_, runErr := sa.Run(ctx, SessionAgentCall{SessionID: sess.ID, Prompt: "work after"})
+	require.NoError(t, runErr)
 
-	first := model.lastCall()
-	require.NotEmpty(t, first)
-	require.Contains(t, promptText(first), "folded earlier",
-		"the first compaction reads the whole transcript")
-
-	brief, err := env.messages.Get(ctx, mustSession(t, env, sess.ID).SummaryMessageID)
-	require.NoError(t, err)
 	model.reset()
-
-	// New turns after the compaction.
-	_, err = sa.Run(ctx, SessionAgentCall{SessionID: sess.ID, Prompt: "work after the brief"})
-	require.NoError(t, err)
-
 	require.NoError(t, sa.Summarize(ctx, sess.ID, nil, nil))
-	second := model.lastCall()
-	require.NotEmpty(t, second)
-
-	prompt := promptText(second)
-	require.Contains(t, prompt, "work after the brief",
-		"the delta after the brief is what still needs summarizing")
-	require.NotContains(t, prompt, "folded earlier",
-		"the folded turn is the brief's job now, not the summarizer's")
-	require.Contains(t, prompt, strings.TrimSpace(brief.Content().Text),
-		"the previous brief is carried into the prompt so its facts survive")
+	require.Empty(t, model.calls(), "compaction must not ask a model to write anything")
 }
 
-// TestSecondCompactionIsFreeWhenNothingChanged covers the case that made
-// compaction expensive: running it again over a transcript that has not moved
-// must not send a prompt at all.
-func TestSecondCompactionIsFreeWhenNothingChanged(t *testing.T) {
+// TestCompactionMovesTheHistoryMarker covers what a compaction actually does:
+// it records where the visible history starts and leaves every message in the
+// database, so the fold is a view rather than a deletion.
+func TestCompactionMovesTheHistoryMarker(t *testing.T) {
 	t.Parallel()
 
-	model := &recordingStreamModel{text: "## Goal\n- stay put"}
 	env := testEnv(t)
-	sa := testSessionAgent(env, model, &finishStreamModel{text: "title"}, "system").(*sessionAgent)
+	sa := testSessionAgent(env, &recordingStreamModel{text: "unused"}, &finishStreamModel{text: "title"}, "system").(*sessionAgent)
+	sa.reduction = newReductionState(&ReductionOptions{
+		Settings:  &config.ContextReductionOptions{CompactionTriggerTokens: intPtr(1), CompactionBudgetTokens: intPtr(1)},
+		DigestDir: t.TempDir(),
+		Provider:  "fake",
+		Model:     "fake-model",
+	})
 
 	ctx := t.Context()
 	sess, err := env.sessions.Create(ctx, "session")
 	require.NoError(t, err)
-	_, err = sa.Run(ctx, SessionAgentCall{SessionID: sess.ID, Prompt: "hi"})
+	_, err = sa.Run(ctx, SessionAgentCall{SessionID: sess.ID, Prompt: "folded earlier"})
 	require.NoError(t, err)
+	_, runErr := sa.Run(ctx, SessionAgentCall{SessionID: sess.ID, Prompt: "work after"})
+	require.NoError(t, runErr)
+
+	before, err := env.messages.List(ctx, sess.ID)
+	require.NoError(t, err)
+	require.NotEmpty(t, before)
+
 	require.NoError(t, sa.Summarize(ctx, sess.ID, nil, nil))
 
-	model.reset()
+	after, err := env.messages.List(ctx, sess.ID)
+	require.NoError(t, err)
+	require.Len(t, after, len(before), "compaction must not delete history")
+
+	updated := mustSession(t, env, sess.ID)
+	require.NotEmpty(t, updated.SummaryMessageID, "the visible history now starts at a later message")
+
+	// The kept tail still contains the newest prompt.
+	visible, err := sa.getSessionMessages(ctx, updated)
+	require.NoError(t, err)
+	var joined strings.Builder
+	for _, msg := range visible {
+		joined.WriteString(msg.Content().Text)
+	}
+	require.Contains(t, joined.String(), "work after", "the recent work survives the fold")
+}
+
+// TestCompactionRecordsWhatItSaved covers the telemetry: a compaction reports
+// the sizes it measured, so the saving is auditable rather than assumed.
+func TestCompactionRecordsWhatItSaved(t *testing.T) {
+	t.Parallel()
+
+	env := testEnv(t)
+	sa := testSessionAgent(env, &recordingStreamModel{text: "unused"}, &finishStreamModel{text: "title"}, "system").(*sessionAgent)
+	// A trigger above what the transcript costs and a budget below it, so the
+	// planner folds the older part and keeps the tail.
+	sa.reduction = newReductionState(&ReductionOptions{
+		Settings: &config.ContextReductionOptions{
+			CompactionTriggerTokens: intPtr(1),
+			CompactionBudgetTokens:  intPtr(10),
+			ResponseReserveTokens:   intPtr(1),
+		},
+		DigestDir: t.TempDir(),
+		Provider:  "fake",
+		Model:     "fake-model",
+	})
+
+	ctx := t.Context()
+	sess, err := env.sessions.Create(ctx, "session")
+	require.NoError(t, err)
+	for _, prompt := range []string{"first prompt", "second prompt", "third prompt"} {
+		_, runErr := sa.Run(ctx, SessionAgentCall{SessionID: sess.ID, Prompt: prompt})
+		require.NoError(t, runErr)
+	}
+
 	require.NoError(t, sa.Summarize(ctx, sess.ID, nil, nil))
-	require.Empty(t, model.calls(), "an unchanged transcript has nothing left to summarize")
+	rec, ok := sa.compactions.get(sess.ID)
+	require.True(t, ok, "a compaction must be recorded")
+	require.Positive(t, rec.OriginalTokens)
+	require.Positive(t, rec.DroppedMessages)
+	require.NotEmpty(t, rec.Trigger)
 }
 
 // recordingStreamModel is a minimal LanguageModel that records the messages it
@@ -294,4 +333,92 @@ func TestSummaryMemoNilStateIsSafe(t *testing.T) {
 	agent := &sessionAgent{}
 	require.Nil(t, agent.reduction)
 	_ = context.Background()
+}
+
+// intPtr is a helper for the optional int settings.
+func intPtr(v int) *int { return &v }
+
+// TestCompactionIsInstantAndLocal pins the properties Chaser's telemetry
+// established for its compaction path: it makes no provider call, and it takes
+// milliseconds rather than the tens of seconds a model-written summary costs.
+func TestCompactionIsInstantAndLocal(t *testing.T) {
+	t.Parallel()
+
+	env := testEnv(t)
+	model := &recordingStreamModel{text: "unused"}
+	sa := testSessionAgent(env, model, &finishStreamModel{text: "title"}, "system").(*sessionAgent)
+	sa.reduction = newReductionState(&ReductionOptions{
+		Settings: &config.ContextReductionOptions{
+			CompactionTriggerTokens: intPtr(1),
+			CompactionBudgetTokens:  intPtr(10),
+			ResponseReserveTokens:   intPtr(1),
+		},
+		DigestDir: t.TempDir(),
+		Provider:  "fake",
+		Model:     "fake-model",
+	})
+
+	ctx := t.Context()
+	sess, err := env.sessions.Create(ctx, "session")
+	require.NoError(t, err)
+	for _, prompt := range []string{"one", "two", "three", "four"} {
+		_, runErr := sa.Run(ctx, SessionAgentCall{SessionID: sess.ID, Prompt: prompt})
+		require.NoError(t, runErr)
+	}
+
+	model.reset()
+	start := time.Now()
+	require.NoError(t, sa.Summarize(ctx, sess.ID, nil, nil))
+	elapsed := time.Since(start)
+
+	require.Empty(t, model.calls(), "compaction must not call a model")
+	require.Less(t, elapsed, 500*time.Millisecond,
+		"compaction is a measurement and a pointer move, not a round-trip")
+}
+
+// TestCompactionWindowIsNoteThenTail checks the payload a compacted request
+// builds: the note that explains the fold comes first, then the kept tail.
+func TestCompactionWindowIsNoteThenTail(t *testing.T) {
+	t.Parallel()
+
+	env := testEnv(t)
+	sa := testSessionAgent(env, &recordingStreamModel{text: "unused"}, &finishStreamModel{text: "title"}, "system").(*sessionAgent)
+	sa.reduction = newReductionState(&ReductionOptions{
+		Settings: &config.ContextReductionOptions{
+			CompactionTriggerTokens: intPtr(1),
+			CompactionBudgetTokens:  intPtr(10),
+			ResponseReserveTokens:   intPtr(1),
+		},
+		DigestDir: t.TempDir(),
+		Provider:  "fake",
+		Model:     "fake-model",
+	})
+
+	ctx := t.Context()
+	sess, err := env.sessions.Create(ctx, "session")
+	require.NoError(t, err)
+	for _, prompt := range []string{"oldest", "middle", "newest"} {
+		_, runErr := sa.Run(ctx, SessionAgentCall{SessionID: sess.ID, Prompt: prompt})
+		require.NoError(t, runErr)
+	}
+	require.NoError(t, sa.Summarize(ctx, sess.ID, nil, nil))
+
+	updated := mustSession(t, env, sess.ID)
+	window, err := sa.getSessionMessages(ctx, updated)
+	require.NoError(t, err)
+	require.NotEmpty(t, window)
+
+	first := window[0].Content().Text
+	require.Contains(t, first, "earlier messages were compacted",
+		"the window opens with the note that explains the fold")
+	require.Contains(t, first, "messages kept verbatim",
+		"the note reports how much survived")
+
+	// The newest work is in the window, not something the fold dropped.
+	var tail strings.Builder
+	for _, msg := range window {
+		tail.WriteString(msg.Content().Text)
+	}
+	require.Contains(t, tail.String(), "newest", "the fold keeps the recent conversation")
+	require.NotContains(t, tail.String(), "oldest", "the fold drops the oldest work")
 }
