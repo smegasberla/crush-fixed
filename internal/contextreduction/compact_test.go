@@ -199,3 +199,28 @@ func TestCompactLocallyKeepsTheAnswerHeadroomOutOfTheBudget(t *testing.T) {
 	require.Equal(t, planBase.KeptMessages, planReserve.KeptMessages,
 		"the reserve is answer headroom and must not change what is kept")
 }
+
+// TestCompactLocallyCountsTheFixedOverhead pins the budget's meaning: it is the
+// size of the whole request, not just its messages. The system prompt and tool
+// definitions ride on every turn, so ignoring them made a budget of N arrive at
+// the provider as N plus a few thousand tokens.
+func TestCompactLocallyCountsTheFixedOverhead(t *testing.T) {
+	t.Parallel()
+
+	messages := messagesOfSize(60, 1000)
+	base := CompactOptions{TriggerTokens: 45000, BudgetTokens: 20000}
+	withOverhead := base
+	withOverhead.OverheadTokens = 6000
+
+	_, planBase := CompactLocally("", messages, "", base)
+	outOverhead, planOverhead := CompactLocally("", messages, "", withOverhead)
+
+	require.True(t, planOverhead.Compact)
+	require.Greater(t, planOverhead.DroppedMessages, planBase.DroppedMessages,
+		"counting the overhead must fold more, since less room is left for messages")
+
+	// What survives plus what every request always pays for has to fit.
+	after := Summarize("", outOverhead).Total() + withOverhead.OverheadTokens
+	require.LessOrEqual(t, after, withOverhead.BudgetTokens+2000,
+		"the built request, overhead included, must land near the budget")
+}

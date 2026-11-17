@@ -116,13 +116,21 @@ func (r *reductionState) pointerOptions() contextreduction.PointerOptions {
 
 // compactOptions builds the compaction planner options from the settings.
 func (r *reductionState) compactOptions() contextreduction.CompactOptions {
+	return r.compactOptionsWithOverhead(0)
+}
+
+// compactOptionsWithOverhead adds the part of a request that is not
+// conversation, so the budget describes the whole prompt the provider sees
+// rather than only its messages.
+func (r *reductionState) compactOptionsWithOverhead(overhead int) contextreduction.CompactOptions {
 	if !r.enabled() {
 		return contextreduction.CompactOptions{}
 	}
 	return contextreduction.CompactOptions{
-		TriggerTokens: r.settings.GetCompactionTriggerTokens(),
-		BudgetTokens:  r.settings.GetCompactionBudgetTokens(),
-		ReserveTokens: r.settings.GetResponseReserveTokens(),
+		TriggerTokens:  r.settings.GetCompactionTriggerTokens(),
+		BudgetTokens:   r.settings.GetCompactionBudgetTokens(),
+		ReserveTokens:  r.settings.GetResponseReserveTokens(),
+		OverheadTokens: overhead,
 	}
 }
 

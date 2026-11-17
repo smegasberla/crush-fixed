@@ -1860,7 +1860,13 @@ func (a *sessionAgent) summarize(ctx context.Context, sessionID, trigger string,
 		brief = a.reduction.briefFor(aiMsgs)
 	}
 
-	compactOpts := a.reduction.compactOptions()
+	// A request is the system prompt, the tool definitions and the
+	// conversation. The first two are paid on every turn, so the budget has to
+	// count them; sizing only the messages made a 25K budget arrive as 30K.
+	overhead := contextreduction.EstimateTokens(a.systemPrompt.Get()) +
+		contextreduction.EstimateTokens(a.systemPromptPrefix.Get()) +
+		tools.DefinitionBytes(a.tools.Copy())/contextreduction.BytesPerToken
+	compactOpts := a.reduction.compactOptionsWithOverhead(overhead)
 	var plan contextreduction.Plan
 	if a.reduction.enabled() {
 		_, plan = contextreduction.CompactLocally("", aiMsgs, brief, compactOpts)

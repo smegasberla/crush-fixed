@@ -45,6 +45,11 @@ type CompactOptions struct {
 	// MaxTailMessages bounds the tail so a compaction always removes
 	// something. Zero means unlimited (bounded only by the budget).
 	MaxTailMessages int
+	// OverheadTokens is the part of every request that is not conversation:
+	// the system prompt and the tool definitions. It is paid on every turn,
+	// so a budget that ignored it would size a request larger than the user
+	// asked for by exactly this much.
+	OverheadTokens int
 }
 
 // WithDefaults fills unset fields.
@@ -265,8 +270,10 @@ func CompactLocally(system string, messages []fantasy.Message, brief string, opt
 	// anyway.
 	//
 	// The brief and the note are paid for out of the budget, because they are
-	// part of the prompt being built.
-	available := opts.BudgetTokens
+	// part of the prompt being built. So is the overhead: the system prompt
+	// and tool definitions ride on every request, and leaving them out made a
+	// "25000 token" budget arrive at the provider as 30K.
+	available := opts.BudgetTokens - opts.OverheadTokens
 	if available < 0 {
 		available = 0
 	}
