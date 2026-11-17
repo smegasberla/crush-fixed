@@ -1601,14 +1601,14 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 			return nil, summarizeErr
 		case len(currentAssistant.ToolCalls()) > 0:
 			existing, _ := a.messageQueue.Get(call.SessionID)
-			// Wrap once. Compaction can fire more than once in a session, and
-			// wrapping an already-wrapped prompt nests it a level deeper every
-			// time, so the text grows without bound and each copy is paid for
-			// on every request.
-			if !strings.HasPrefix(call.Prompt, interruptedPromptPrefix) {
-				call.Prompt = fmt.Sprintf("%s%s`", interruptedPromptPrefix, call.Prompt)
-			}
-			// The rewritten prompt is a new message, not the report.
+			// The prompt is re-queued unchanged. It used to be rewritten to
+			// announce the interruption, but that text is a transient
+			// instruction, not something the user said: stored as a message it
+			// stayed in history and was re-sent on every request afterwards,
+			// with a new copy each time compaction fired. The compaction note
+			// already explains the fold, so the wrapper is redundant.
+			//
+			// The queued turn is not the report, so it must not re-deliver one.
 			call.Report = nil
 			a.messageQueue.Set(call.SessionID, append(existing, call))
 			continued = true
@@ -2203,7 +2203,87 @@ func (a *sessionAgent) getSessionMessages(ctx context.Context, session session.S
 			}}, msgs...)
 		}
 	}
+
+	// Sessions written before the resume wrapper was removed still carry it
+	// as a stored user message, one copy per compaction. It is not something
+	// the user said, so it is stripped on read: the transcript on disk is
+	// history and is left alone, but nothing sends the text again.
+	msgs = stripResumeWrappers(msgs)
 	return msgs, nil
+}
+
+// stripResumeWrappers removes the old interruption announcement from a
+// transcript. It returns msg with any such prompt collapsed to what the user
+// actually wrote.
+func stripResumeWrappers(msgs []message.Message) []message.Message {
+	for i := range msgs {
+		if msgs[i].Role != message.User {
+			continue
+		}
+		for _, part := range msgs[i].Parts {
+			tc, ok := part.(message.TextContent)
+			if !ok || !strings.Contains(tc.Text, resumeWrapperMarker) {
+				continue
+			}
+			msgs[i].Parts = replaceResumeWrapper(msgs[i].Parts)
+			break
+		}
+	}
+	return msgs
+}
+
+// resumeWrapperMarker is the distinctive text of the removed announcement.
+const resumeWrapperMarker = "The previous session was interrupted because it got too long"
+
+// replaceResumeWrapper rebuilds a user message's parts with the wrapper
+// stripped from every text part.
+func replaceResumeWrapper(parts []message.ContentPart) []message.ContentPart {
+	out := make([]message.ContentPart, 0, len(parts))
+	for _, part := range parts {
+		tc, ok := part.(message.TextContent)
+		if !ok {
+			out = append(out, part)
+			continue
+		}
+		stripped := stripOneWrapper(tc.Text)
+		if stripped == "" {
+			// The whole message was the wrapper, so there is nothing left to
+			// send. Keep the part only when it carried context.
+			if tc.Context == "" {
+				continue
+			}
+			tc.Text = ""
+			out = append(out, tc)
+			continue
+		}
+		tc.Text = stripped
+		out = append(out, tc)
+	}
+	return out
+}
+
+// stripOneWrapper unwraps nested interruption announcements, innermost first,
+// so a prompt that was wrapped several times collapses to the original.
+func stripOneWrapper(text string) string {
+	for {
+		i := strings.Index(text, resumeWrapperMarker)
+		if i < 0 {
+			return strings.TrimSpace(text)
+		}
+		// The wrapper is "<prefix><original>`"; keep everything after the
+		// opening backtick of the innermost copy.
+		rest := text[i:]
+		open := strings.Index(rest, "`")
+		if open < 0 {
+			return strings.TrimSpace(text)
+		}
+		body := rest[open+1:]
+		// Drop the closing backtick that the wrapper appended.
+		if j := strings.LastIndex(body, "`"); j >= 0 {
+			body = body[:j] + body[j+1:]
+		}
+		text = text[:i] + body
+	}
 }
 
 // interruptedPromptPrefix opens a prompt replayed after a compaction cut a
