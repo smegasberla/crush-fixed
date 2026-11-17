@@ -2220,16 +2220,24 @@ func stripResumeWrappers(msgs []message.Message) []message.Message {
 		if msgs[i].Role != message.User {
 			continue
 		}
-		for _, part := range msgs[i].Parts {
-			tc, ok := part.(message.TextContent)
-			if !ok || !strings.Contains(tc.Text, resumeWrapperMarker) {
-				continue
-			}
-			msgs[i].Parts = replaceResumeWrapper(msgs[i].Parts)
-			break
+		if !hasResumeWrapper(msgs[i].Parts) {
+			continue
 		}
+		msgs[i].Parts = replaceResumeWrapper(msgs[i].Parts)
 	}
 	return msgs
+}
+
+// hasResumeWrapper reports whether any text part carries the announcement.
+// The check is a substring scan over user messages only, which is cheap next
+// to the prompt assembly it sits in.
+func hasResumeWrapper(parts []message.ContentPart) bool {
+	for _, part := range parts {
+		if tc, ok := part.(message.TextContent); ok && strings.Contains(tc.Text, resumeWrapperMarker) {
+			return true
+		}
+	}
+	return false
 }
 
 // resumeWrapperMarker is the distinctive text of the removed announcement.
