@@ -1916,7 +1916,16 @@ func (a *sessionAgent) summarize(ctx context.Context, sessionID, trigger string,
 	// fold is memoized against it. Nothing is deleted: the window moved, the
 	// history did not.
 	marker := msgs[len(msgs)-kept]
+	// Record what the folded part did so the next assistant does not re-read
+	// files or re-run commands it already has. This is built from the folded
+	// messages locally: asking a model for it would cost a full round-trip.
+	folded, _ := a.preparePrompt(msgs[:len(msgs)-kept], false, false)
+	continuity := contextreduction.BuildContinuityNote(folded)
+	continuityText := continuity.Render()
 	note := contextreduction.SummaryNote(brief, len(msgs)-kept, kept)
+	if continuityText != "" {
+		note = "Work already done in the folded part:\n" + continuityText + "\n\n" + note
+	}
 	if a.reduction.enabled() {
 		a.reduction.rememberNote(marker.ID, note)
 	}
