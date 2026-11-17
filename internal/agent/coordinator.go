@@ -1070,7 +1070,9 @@ func (c *coordinator) effectiveToolNames(agentCfg config.Agent, isSubAgent bool)
 			return isSubAgent || !c.interactive
 		case AgentToolName:
 			return isSubAgent || c.interactive
-		case AgentDispatchToolName, AgentSendToolName, AgentStatusToolName, AgentStopToolName:
+		case AgentDispatchToolName, AgentSendToolName, AgentStatusToolName, AgentStopToolName, SwarmToolName:
+			// No worker may spawn more workers: a swarm is a multiplier, and
+			// nested fan-out is how a cheap lookup turns into a quota drain.
 			return isSubAgent || !c.interactive
 		}
 		return false
@@ -1102,6 +1104,16 @@ func (c *coordinator) buildTools(ctx context.Context, agent config.Agent, isSubA
 			return nil, err
 		}
 		allTools = append(allTools, dispatchTool)
+	}
+	// A swarm is a cheap fan-out for independent lookups. It is a delegation
+	// tool, so subagents (whose allowed list is filtered by effectiveToolNames)
+	// never receive it: workers must not spawn their own swarms.
+	if slices.Contains(allowed, SwarmToolName) {
+		swarm, err := c.swarmTool(ctx, agent.ID)
+		if err != nil {
+			return nil, err
+		}
+		allTools = append(allTools, swarm)
 	}
 	if slices.Contains(allowed, AgentSendToolName) {
 		allTools = append(allTools, c.agentSendTool(parentModel))
