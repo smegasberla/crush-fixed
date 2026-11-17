@@ -1424,7 +1424,11 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 					return false
 				}
 				cw := int64(largeModel.CatwalkCfg.ContextWindow)
-				tokens := currentSession.CompletionTokens + currentSession.PromptTokens
+				// Only the prompt occupies the window the next request has
+				// to fit into. Adding the answer's tokens counted output
+				// that is already part of that prompt on the next round, so
+				// the trigger fired early and at an unpredictable size.
+				tokens := currentSession.PromptTokens
 
 				// The configured trigger wins when it is set, because it is
 				// the number the user chose for cost, not just for survival.

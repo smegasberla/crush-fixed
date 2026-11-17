@@ -11,6 +11,10 @@ import (
 // model can recognise what it was and whether it still matters, and drops the
 // middle, which is where the bulk lives.
 const (
+	// Stubs keep a slice, not the whole body: enough to recognise the result
+	// and decide whether to ask for the rest, which is what a model needs to
+	// act. The body stays recoverable through the tool that produced it.
+	//
 	// defaultStubHeadTokens is how much of a digested body survives at its
 	// start.
 	defaultStubHeadTokens = 160
@@ -312,6 +316,16 @@ func withToolResultText(part fantasy.ToolResultPart, text string) fantasy.ToolRe
 // digestedStub renders the replacement for an aged body: a header naming the
 // tool, its size and hash, the paths it mentioned, then the head and tail.
 func digestedStub(toolName, body, hash string, opts DigestOptions) string {
+	// Fold back-to-back repeats first: a body that is mostly one line
+	// repeated becomes a few lines and a count before the head/tail slice is
+	// taken, so the slice covers distinct information rather than the same
+	// line many times.
+	if folded, ok := CollapseRepeatedLines(body, 3); ok {
+		foldedTokens := EstimateTokens(folded)
+		if foldedTokens < EstimateTokens(body) {
+			body = folded
+		}
+	}
 	tokens := EstimateTokens(body)
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "[%s result digested to fit the context window: %d tokens, sha256:%s]", toolLabel(toolName), tokens, hash)

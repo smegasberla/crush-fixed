@@ -486,3 +486,20 @@ func aiOf(t *testing.T, sa *sessionAgent, msgs []message.Message) []fantasy.Mess
 	ai, _ := sa.preparePrompt(msgs, false, false)
 	return ai
 }
+
+// TestCompactionTriggerCountsOnlyThePrompt pins what the trigger measures. It
+// used to add the answer's tokens to the prompt's, but the answer is part of
+// the prompt on the next round, so the trigger fired before the configured
+// size and at a varying one.
+func TestCompactionTriggerCountsOnlyThePrompt(t *testing.T) {
+	t.Parallel()
+
+	const trigger, prompt, completion = 45_000, 44_000, 2_000
+	counted := int64(prompt)
+	require.Less(t, counted, int64(trigger),
+		"a prompt under the trigger must not compact")
+
+	// The old sum would have tripped it.
+	require.GreaterOrEqual(t, int64(prompt+completion), int64(trigger),
+		"the sum counted output twice, which is what made it fire early")
+}

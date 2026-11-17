@@ -1037,9 +1037,15 @@ const (
 	DefaultCompactionBudgetTokens  = 25000
 	DefaultCompactionSummaryTokens = 2000
 	DefaultResponseReserveTokens   = 8192
-	DefaultToolResultDigestTokens  = 1024
-	DefaultReadPointerStubTokens   = 256
-	DefaultCeilingSafetyPercent    = 90
+	// DefaultToolResultDigestTokens is the size above which an aged tool result
+	// is replaced by a stub. Lowering it is the main saving in a tool-heavy
+	// session: a result enters the conversation once and is re-sent on every
+	// later request, so anything larger than this is paid for repeatedly. The
+	// live round is never digested, so the model always has what it just asked
+	// for in full.
+	DefaultToolResultDigestTokens = 512
+	DefaultReadPointerStubTokens  = 256
+	DefaultCeilingSafetyPercent   = 90
 )
 
 // GetContextReduction returns the context-reduction settings, never nil.

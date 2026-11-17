@@ -1077,6 +1077,12 @@ func (c *coordinator) effectiveToolNames(agentCfg config.Agent, isSubAgent bool)
 	})
 }
 
+// hasLSPClients reports whether any LSP server is running. A nil manager (which
+// is what a test or a disabled LSP setup leaves behind) has none.
+func (c *coordinator) hasLSPClients() bool {
+	return c.lspManager != nil && c.lspManager.Clients() != nil && c.lspManager.Clients().Len() > 0
+}
+
 // buildTools builds an agent's tools. parentModel reports the model the
 // agent runs on, which a dispatched subagent inherits.
 func (c *coordinator) buildTools(ctx context.Context, agent config.Agent, isSubAgent bool, parentModel func() Model) ([]fantasy.AgentTool, error) {
@@ -1149,7 +1155,7 @@ func (c *coordinator) buildTools(ctx context.Context, agent config.Agent, isSubA
 	// gives the model eight tools that can only fail. auto_lsp starts servers
 	// on demand, so the config alone does not say whether any exist: the
 	// manager's live clients do.
-	if len(c.cfg.Config().LSP) > 0 || c.lspManager.Clients().Len() > 0 {
+	if len(c.cfg.Config().LSP) > 0 || c.hasLSPClients() {
 		allTools = append(
 			allTools,
 			tools.NewDiagnosticsTool(c.lspManager),
