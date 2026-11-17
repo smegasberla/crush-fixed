@@ -1144,8 +1144,12 @@ func (c *coordinator) buildTools(ctx context.Context, agent config.Agent, isSubA
 		allTools = append(allTools, tools.NewQuestionTool(c.questions))
 	}
 
-	// Add LSP tools if user has configured LSPs or auto_lsp is enabled (nil or true).
-	if len(c.cfg.Config().LSP) > 0 || c.cfg.Config().Options.AutoLSP == nil || *c.cfg.Config().Options.AutoLSP {
+	// Add LSP tools only when there is an LSP to serve them. Registering them
+	// with no server behind them costs about 900 tokens on every request and
+	// gives the model eight tools that can only fail. auto_lsp starts servers
+	// on demand, so the config alone does not say whether any exist: the
+	// manager's live clients do.
+	if len(c.cfg.Config().LSP) > 0 || c.lspManager.Clients().Len() > 0 {
 		allTools = append(
 			allTools,
 			tools.NewDiagnosticsTool(c.lspManager),

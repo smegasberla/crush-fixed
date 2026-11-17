@@ -104,9 +104,17 @@ type ViewResponseMetadata struct {
 }
 
 const (
-	ViewToolName     = "view"
-	MaxViewSize      = 200 * 1024 // 200KB
-	DefaultReadLimit = 200
+	ViewToolName = "view"
+	// MaxViewSize is the ceiling on one read. A read is the other half of the
+	// per-call cost: whatever it returns stays in the conversation and is
+	// re-sent on every later request, so the ceiling is counted in tokens
+	// (about 4 bytes each) rather than in what a file happens to weigh.
+	MaxViewSize = 32 * 1024 // 32KB, about 8,000 tokens
+	// DefaultReadLimit is the lines a read takes with no explicit limit. At a
+	// typical 40-60 characters a line this is roughly 1,000 tokens, which is
+	// the size a caller can act on; a wider range is a deliberate choice, not
+	// the default.
+	DefaultReadLimit = 80
 	MaxLineLength    = 2000
 	// DefaultAroundContext is how many lines each side of "around" a read
 	// includes. It is wide enough to show a function and its signature.

@@ -17,8 +17,8 @@ Background: run_in_background=true returns a shell ID. A job that just started h
 printed nothing, so read job_output when its result is next (wait=true blocks).
 auto_background_after moves a command to the background after that many seconds.
 job_kill ends a job. Use it for servers, watchers and tail -f; not builds, tests or
-git. Output over {{ .MaxOutputLength }} characters is truncated, and the marker names a
-file holding all of it.
+git. Output over {{ .MaxOutputLength }} characters keeps its head and tail and names a
+file with the middle, so ask for the range you need rather than re-running.
 
 <git_commits>
 To commit: in one batch run git status, git diff and git log for style. Stage only

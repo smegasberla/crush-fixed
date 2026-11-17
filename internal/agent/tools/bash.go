@@ -53,8 +53,14 @@ const (
 	BashToolName = "bash"
 
 	DefaultAutoBackgroundAfter = 60 // Commands taking longer automatically become background jobs
-	MaxOutputLength            = 30000
-	BashNoOutput               = "no output"
+	// MaxOutputLength bounds what one bash call puts in the conversation.
+	// Output is the dominant per-call cost: at 4 bytes per token, 30,000
+	// characters was ~7,500 tokens for a single command, and every later
+	// request in the session carried it again. The dropped middle is spilled
+	// to a file whose path stays in the marker, so nothing is lost: the agent
+	// reads the range it needs instead of carrying the whole output.
+	MaxOutputLength = 4000
+	BashNoOutput    = "no output"
 )
 
 //go:embed bash.md.tpl
