@@ -458,9 +458,15 @@ func (c *Commands) defaultCommands() []*CommandItem {
 		NewCommandItem(c.com.Styles, "switch_model", "Switch Model", "ctrl+l", ActionOpenDialog{ModelsID}),
 	}
 
-	// Only show compact command if there's an active session
+	// A manual compaction for an active session. It runs the local builder:
+	// measure, keep a recent tail, stamp a note. No model call.
 	if c.hasSession {
-		commands = append(commands, NewCommandItem(c.com.Styles, "summarize", "Summarize Session", "", ActionSummarize{SessionID: c.sessionID}))
+		commands = append(commands,
+			NewCommandItem(c.com.Styles, "compact", "Compact Session", "",
+				ActionCompact{SessionID: c.sessionID}).
+				WithAliases("compact", "summarize").
+				WithDescription("Fold older messages now, keeping recent work verbatim"),
+		)
 	}
 
 	// Add reasoning toggle for models that support it

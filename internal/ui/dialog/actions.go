@@ -96,7 +96,9 @@ type (
 		Name string
 	}
 	ActionInitializeProject struct{}
-	ActionSummarize         struct {
+	// ActionCompact requests a manual compaction of the session using the
+	// local builder, not a model-written summary.
+	ActionCompact struct {
 		SessionID string
 	}
 	// ActionSelectReasoningEffort is a message indicating a reasoning effort
