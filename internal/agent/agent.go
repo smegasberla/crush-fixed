@@ -38,6 +38,7 @@ import (
 	"charm.land/tone"
 	"github.com/charmbracelet/crush/internal/agent/hyper"
 	"github.com/charmbracelet/crush/internal/agent/notify"
+	"github.com/charmbracelet/crush/internal/agent/prompt"
 	"github.com/charmbracelet/crush/internal/agent/tools"
 	"github.com/charmbracelet/crush/internal/agent/tools/mcp"
 	"github.com/charmbracelet/crush/internal/config"
@@ -999,9 +1000,11 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 	if err != nil {
 		return nil, fmt.Errorf("failed to get session messages: %w", err)
 	}
-	// Generate title from the first real (non-shell) user prompt in the
-	// background; Run must not wait on it. CancelAll drains it instead.
-	if !hasUserTextMessage(msgs) {
+	// The first real prompt of a session also carries the repository
+	// snapshot, which is volatile and so cannot live in the cached system
+	// prompt.
+	firstTurn := !hasUserTextMessage(msgs)
+	if firstTurn {
 		titleCtx := context.WithoutCancel(ctx)
 		a.titles.begin()
 		go func() {
@@ -1016,6 +1019,9 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 	// can change what this turn does, not just what it says afterwards.
 	memoryBlock := a.leverage.memoryBlock(ctx, call.Prompt)
 	modelContext := hostContextPrompt(call.HostContext) + notesPrompt(a.takeNotes(call.SessionID)) + memoryBlock
+	if firstTurn {
+		modelContext += a.gitStatusContext(ctx)
+	}
 	_, err = a.createUserMessage(ctx, call, modelContext)
 	if err != nil {
 		return nil, err
@@ -2877,6 +2883,22 @@ func (a *sessionAgent) workaroundProviderMediaLimitations(messages []fantasy.Mes
 	}
 
 	return convertedMessages
+}
+
+// gitStatusContext returns the repository state to carry on the first user
+// turn. It used to live in the system prompt, where anything that changes the
+// working tree rewrote the cached prefix and made every round a cache miss.
+// Only the first turn carries it: later turns of the same session have already
+// been told, and repeating it would grow the transcript for nothing.
+func (a *sessionAgent) gitStatusContext(ctx context.Context) string {
+	if a.workingDir == "" {
+		return ""
+	}
+	block := prompt.GitStatusBlock(ctx, a.workingDir)
+	if block == "" {
+		return ""
+	}
+	return "\n\n<git_status>\n" + block + "\n</git_status>"
 }
 
 // buildSummaryPrompt constructs the prompt the background digest uses to write

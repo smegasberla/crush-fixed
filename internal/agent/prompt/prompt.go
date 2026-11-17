@@ -307,6 +307,18 @@ func isGitRepo(dir string) bool {
 	return err == nil
 }
 
+// GitStatusBlock renders the repository state that used to sit in the system
+// prompt. It is volatile, so it is carried on the user turn instead: a system
+// prompt that changes between rounds invalidates the provider's cached prefix
+// and every round pays full price for it again.
+func GitStatusBlock(ctx context.Context, dir string) string {
+	status, err := getGitStatus(ctx, dir)
+	if err != nil || status == "" {
+		return ""
+	}
+	return "Git status (snapshot at conversation start - may be outdated):\n" + status
+}
+
 func getGitStatus(ctx context.Context, dir string) (string, error) {
 	sh := shell.NewShell(&shell.Options{
 		WorkingDir: dir,
