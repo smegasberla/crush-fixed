@@ -13,3 +13,7 @@ func writeText(string) error {
 func read(Format) ([]byte, error) {
 	return nil, ErrUnsupported
 }
+
+func readMedia() (Media, error) {
+	return Media{}, ErrUnsupported
+}

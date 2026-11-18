@@ -1727,8 +1727,13 @@ func (m *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if _, isAttachment := msg.(message.Attachment); isAttachment && m.attachmentsLimitReached() {
 		max := m.currentModelMaxAttachments()
 		cmds = append(cmds, util.ReportWarn(fmt.Sprintf("Maximum attachment reached for this session (%d)", max)))
-	} else if m.changeAttachments(func() bool { return m.attachments.Update(msg) }) {
-		m.invalidateFrames()
+	} else {
+		if attachment, isAttachment := msg.(message.Attachment); isAttachment && !m.attachmentIsReadable(attachment) {
+			cmds = append(cmds, util.ReportWarn("Attached media will not be sent: the current model cannot read images or videos"))
+		}
+		if m.changeAttachments(func() bool { return m.attachments.Update(msg) }) {
+			m.invalidateFrames()
+		}
 	}
 	// Any update may have put a spinner on screen (new message, tool update,
 	// scroll, session load); make sure the clock is running. This is the
@@ -3445,18 +3450,12 @@ func (m *UI) handleKeyPressMsg(msg tea.KeyPressMsg) tea.Cmd {
 					cmds = append(cmds, cmd)
 				}
 			case key.Matches(msg, m.keyMap.Editor.AddImage):
-				if !m.currentModelSupportsImages() {
-					break
-				}
 				if cmd := m.openFilesDialog(); cmd != nil {
 					cmds = append(cmds, cmd)
 				}
 
 			case key.Matches(msg, m.keyMap.Editor.PasteImage):
-				if !m.currentModelSupportsImages() {
-					break
-				}
-				cmds = append(cmds, m.pasteImageFromClipboard)
+				cmds = append(cmds, m.pasteMediaFromClipboard)
 			case key.Matches(msg, m.keyMap.Editor.PasteText):
 				cmds = append(cmds, m.pasteTextFromClipboard)
 
@@ -4363,6 +4362,18 @@ func (m *UI) inlineFocusHelp() key.Binding {
 // currentModelSupportsVideos reports whether the current model accepts video
 // input. Catwalk represents image and video input with one Vision capability,
 // so a model detected as multimodal accepts both.
+// attachmentIsReadable reports whether the current model will actually receive
+// the attachment's bytes. Attaching media a text-only model cannot read is
+// allowed, but the user is told rather than left with a silent no-op.
+func (m *UI) attachmentIsReadable(attachment message.Attachment) bool {
+	switch {
+	case attachment.IsImage(), attachment.IsVideo():
+		return m.currentModelSupportsImages() || m.currentModelSupportsVideos()
+	default:
+		return true
+	}
+}
+
 func (m *UI) currentModelSupportsVideos() bool {
 	cfg := m.com.Config()
 	if cfg == nil {
@@ -6520,77 +6531,101 @@ func (m *UI) pasteTextFromClipboard() tea.Msg {
 	return tea.PasteMsg{Content: string(textData)}
 }
 
-// pasteImageFromClipboard reads image data from the system clipboard and
-// creates an attachment. If no image data is found, it falls back to
-// interpreting clipboard text as an image or video file path, which is how
-// desktops expose a copied video file.
-func (m *UI) pasteImageFromClipboard() tea.Msg {
-	if !m.currentModelSupportsImages() && !m.currentModelSupportsVideos() {
-		return util.NewWarnMsg("The current model does not support image or video attachments")
-	}
-	imageData, err := clipboard.Read(clipboard.FormatImage)
-	if int64(len(imageData)) > common.MaxAttachmentSize {
-		return util.InfoMsg{
-			Type: util.InfoTypeError,
-			Msg:  "File too large, max 5MB",
+// pasteMediaFromClipboard attaches an image or a video from the system
+// clipboard. Images arrive as bytes from a screenshot; a copied video is a
+// file path, so the file is read instead. Every failure is reported, because a
+// paste that silently does nothing is indistinguishable from a broken binding.
+func (m *UI) pasteMediaFromClipboard() tea.Msg {
+	media, err := clipboard.ReadMedia()
+	if err != nil {
+		if text, textErr := clipboard.Read(clipboard.FormatText); textErr == nil && len(text) > 0 {
+			path := strings.TrimSpace(strings.ReplaceAll(string(text), "\\ ", " "))
+			if _, statErr := os.Stat(path); statErr == nil {
+				return m.mediaAttachmentFromPath(path)
+			}
 		}
+		return util.NewWarnMsg("Clipboard does not contain an image or video")
 	}
-	name := fmt.Sprintf("paste_%d.png", m.pasteIdx())
-	if err == nil {
-		return message.Attachment{
-			FilePath: name,
-			FileName: name,
-			MimeType: mimeOf(imageData),
-			Content:  imageData,
-		}
+	if int64(len(media.Data)) > common.MaxAttachmentSize {
+		return util.NewInfoMsg("Clipboard media is too large, max 5MB")
 	}
 
-	textData, textErr := clipboard.Read(clipboard.FormatText)
-	if textErr != nil || len(textData) == 0 {
-		return nil // Clipboard is empty or does not contain an image
+	ext := mediaExtension(media.MIMEType)
+	name := fmt.Sprintf("paste_%d%s", m.pasteIdx(), ext)
+	return message.Attachment{
+		FilePath: name,
+		FileName: name,
+		MimeType: media.MIMEType,
+		Content:  media.Data,
 	}
+}
 
-	path := strings.TrimSpace(string(textData))
-	path = strings.ReplaceAll(path, "\\ ", " ")
-	if _, statErr := os.Stat(path); statErr != nil {
-		return nil // Clipboard does not contain an image or valid file path
-	}
-
+// mediaAttachmentFromPath reads a pasted image or video path into an
+// attachment, reporting why it was rejected when it cannot be used.
+func (m *UI) mediaAttachmentFromPath(path string) tea.Msg {
 	if !common.IsImagePath(path) && !common.IsVideoPath(path) {
 		return util.NewInfoMsg("File type is not a supported image or video format")
 	}
-
-	fileInfo, statErr := os.Stat(path)
-	if statErr != nil {
-		return util.InfoMsg{
-			Type: util.InfoTypeError,
-			Msg:  fmt.Sprintf("Unable to read file: %v", statErr),
-		}
+	fileInfo, err := os.Stat(path)
+	if err != nil {
+		return util.ReportError(err)
 	}
 	if fileInfo.Size() > common.MaxAttachmentSize {
-		return util.InfoMsg{
-			Type: util.InfoTypeError,
-			Msg:  "File too large, max 5MB",
-		}
+		return util.NewInfoMsg("File is too large, max 5MB")
 	}
-
-	content, readErr := os.ReadFile(path)
-	if readErr != nil {
-		return util.InfoMsg{
-			Type: util.InfoTypeError,
-			Msg:  fmt.Sprintf("Unable to read file: %v", readErr),
-		}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return util.ReportError(err)
 	}
-
 	return message.Attachment{
 		FilePath: path,
 		FileName: filepath.Base(path),
-		MimeType: mimeOf(content),
+		MimeType: mediaMIMEForPath(path, content),
 		Content:  content,
 	}
 }
 
-var pasteRE = regexp.MustCompile(`paste_(\d+).txt`)
+// mediaExtension maps a clipboard MIME type to the file extension used in the
+// synthetic attachment name.
+func mediaExtension(mimeType string) string {
+	switch mimeType {
+	case "image/jpeg":
+		return ".jpg"
+	case "image/webp":
+		return ".webp"
+	case "image/gif":
+		return ".gif"
+	case "video/mp4":
+		return ".mp4"
+	case "video/webm":
+		return ".webm"
+	case "video/quicktime":
+		return ".mov"
+	case "video/x-matroska":
+		return ".mkv"
+	default:
+		return ".png"
+	}
+}
+
+// mediaMIMEForPath labels a file by extension when it is a video, since a
+// container header is not reliably sniffable, and by content otherwise.
+func mediaMIMEForPath(path string, content []byte) string {
+	lower := strings.ToLower(path)
+	switch {
+	case strings.HasSuffix(lower, ".mp4"), strings.HasSuffix(lower, ".m4v"):
+		return "video/mp4"
+	case strings.HasSuffix(lower, ".webm"):
+		return "video/webm"
+	case strings.HasSuffix(lower, ".mov"):
+		return "video/quicktime"
+	case strings.HasSuffix(lower, ".mkv"):
+		return "video/x-matroska"
+	}
+	return mimeOf(content)
+}
+
+var pasteRE = regexp.MustCompile(`paste_(\d+)\.[a-z0-9]+`)
 
 func (m *UI) pasteIdx() int {
 	result := 0

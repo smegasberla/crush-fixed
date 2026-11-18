@@ -15,6 +15,13 @@ const (
 	FormatImage
 )
 
+// Media is a raw clipboard payload together with the MIME type it arrived
+// under, so callers can label an attachment without re-sniffing the bytes.
+type Media struct {
+	Data     []byte
+	MIMEType string
+}
+
 var (
 	// ErrUnsupported is returned when clipboard access is not available on
 	// the current platform.
@@ -46,4 +53,11 @@ func WriteText(text string) error {
 // without clipboard support.
 func Read(f Format) ([]byte, error) {
 	return read(f)
+}
+
+// ReadMedia returns the first image or video payload on the clipboard. A
+// desktop that copies a video file puts a path on the clipboard instead of
+// the bytes, so the file is read when it is media we accept.
+func ReadMedia() (Media, error) {
+	return readMedia()
 }
