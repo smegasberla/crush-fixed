@@ -145,11 +145,11 @@ func DefaultKeyMap() KeyMap {
 	)
 	km.Editor.AddImage = key.NewBinding(
 		key.WithKeys("ctrl+f"),
-		key.WithHelp("ctrl+f", "add image"),
+		key.WithHelp("ctrl+f", "add image or video"),
 	)
 	km.Editor.PasteImage = key.NewBinding(
 		key.WithKeys("ctrl+v"),
-		key.WithHelp("ctrl+v", "paste image from clipboard"),
+		key.WithHelp("ctrl+v", "paste image or video from clipboard"),
 	)
 	km.Editor.PasteText = key.NewBinding(
 		key.WithKeys("ctrl+shift+v"),

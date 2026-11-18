@@ -4244,7 +4244,7 @@ func (m *UI) FullHelp() [][]key.Binding {
 				k.Editor.CopySelection,
 				k.Editor.CutSelection,
 			}
-			if m.currentModelSupportsImages() {
+			if m.currentModelSupportsImages() || m.currentModelSupportsVideos() {
 				editorBinds = append(editorBinds, k.Editor.AddImage, k.Editor.PasteImage)
 			}
 			binds = append(binds, editorBinds)
@@ -4320,7 +4320,7 @@ func (m *UI) FullHelp() [][]key.Binding {
 				k.Editor.CopySelection,
 				k.Editor.CutSelection,
 			}
-			if m.currentModelSupportsImages() {
+			if m.currentModelSupportsImages() || m.currentModelSupportsVideos() {
 				editorBinds = append(editorBinds, k.Editor.AddImage, k.Editor.PasteImage)
 			}
 			binds = append(binds, editorBinds)
@@ -4358,6 +4358,22 @@ func (m *UI) inlineFocusHelp() key.Binding {
 	}
 	tab.SetHelp("tab", description)
 	return tab
+}
+
+// currentModelSupportsVideos reports whether the current model accepts video
+// input. Catwalk represents image and video input with one Vision capability,
+// so a model detected as multimodal accepts both.
+func (m *UI) currentModelSupportsVideos() bool {
+	cfg := m.com.Config()
+	if cfg == nil {
+		return false
+	}
+	agentCfg, ok := cfg.Agents[config.AgentCoder]
+	if !ok {
+		return false
+	}
+	model := cfg.GetModelByType(agentCfg.Model)
+	return model != nil && model.Capabilities.Vision
 }
 
 func (m *UI) currentModelSupportsImages() bool {
@@ -5196,6 +5212,9 @@ func (m *UI) insertFileCompletion(path string) tea.Cmd {
 		if !m.currentModelSupportsAudio() && common.IsAudioPath(path) {
 			return util.NewWarnMsg("The current model does not support audio attachments")
 		}
+		if !m.currentModelSupportsVideos() && common.IsVideoPath(path) {
+			return util.NewWarnMsg("The current model does not support video attachments")
+		}
 
 		absPath, _ := filepath.Abs(path)
 
@@ -5279,6 +5298,9 @@ func (m *UI) insertMCPResourceCompletion(item completions.ResourceCompletionValu
 		}
 		if !m.currentModelSupportsAudio() && strings.HasPrefix(mimeType, "audio/") {
 			return util.NewWarnMsg("The current model does not support audio attachments")
+		}
+		if !m.currentModelSupportsVideos() && strings.HasPrefix(mimeType, "video/") {
+			return util.NewWarnMsg("The current model does not support video attachments")
 		}
 
 		return message.Attachment{
@@ -5982,8 +6004,8 @@ func (m *UI) openSessionsDialog() tea.Cmd {
 
 // openFilesDialog opens the file picker dialog.
 func (m *UI) openFilesDialog() tea.Cmd {
-	if !m.currentModelSupportsImages() {
-		return util.ReportWarn("The current model does not support image attachments")
+	if !m.currentModelSupportsImages() && !m.currentModelSupportsVideos() {
+		return util.ReportWarn("The current model does not support image or video attachments")
 	}
 	if m.dialog.ContainsDialog(dialog.FilePickerID) {
 		// Bring to front
@@ -6409,7 +6431,7 @@ func (m *UI) handlePasteMsg(msg tea.PasteMsg) tea.Cmd {
 			if _, err := os.Stat(path); os.IsNotExist(err) {
 				return false
 			}
-			if !common.IsImagePath(path) && !common.IsAudioPath(path) {
+			if !common.IsImagePath(path) && !common.IsAudioPath(path) && !common.IsVideoPath(path) {
 				return false
 			}
 		}
@@ -6426,6 +6448,9 @@ func (m *UI) handlePasteMsg(msg tea.PasteMsg) tea.Cmd {
 	}
 	if !m.currentModelSupportsAudio() && slices.ContainsFunc(paths, common.IsAudioPath) {
 		return util.ReportWarn("The current model does not support audio attachments")
+	}
+	if !m.currentModelSupportsVideos() && slices.ContainsFunc(paths, common.IsVideoPath) {
+		return util.ReportWarn("The current model does not support video attachments")
 	}
 
 	var cmds []tea.Cmd
@@ -6497,10 +6522,11 @@ func (m *UI) pasteTextFromClipboard() tea.Msg {
 
 // pasteImageFromClipboard reads image data from the system clipboard and
 // creates an attachment. If no image data is found, it falls back to
-// interpreting clipboard text as a file path.
+// interpreting clipboard text as an image or video file path, which is how
+// desktops expose a copied video file.
 func (m *UI) pasteImageFromClipboard() tea.Msg {
-	if !m.currentModelSupportsImages() {
-		return util.NewWarnMsg("The current model does not support image attachments")
+	if !m.currentModelSupportsImages() && !m.currentModelSupportsVideos() {
+		return util.NewWarnMsg("The current model does not support image or video attachments")
 	}
 	imageData, err := clipboard.Read(clipboard.FormatImage)
 	if int64(len(imageData)) > common.MaxAttachmentSize {
@@ -6530,8 +6556,8 @@ func (m *UI) pasteImageFromClipboard() tea.Msg {
 		return nil // Clipboard does not contain an image or valid file path
 	}
 
-	if !common.IsImagePath(path) {
-		return util.NewInfoMsg("File type is not a supported image format")
+	if !common.IsImagePath(path) && !common.IsVideoPath(path) {
+		return util.NewInfoMsg("File type is not a supported image or video format")
 	}
 
 	fileInfo, statErr := os.Stat(path)

@@ -129,6 +129,18 @@ func IsImagePath(path string) bool {
 	})
 }
 
+// AllowedVideoTypes defines the permitted video file types.
+var AllowedVideoTypes = []string{".mp4", ".mov", ".webm", ".mkv", ".avi", ".m4v"}
+
+// IsVideoPath reports whether the given path has one of the allowed video
+// extensions.
+func IsVideoPath(path string) bool {
+	lowerPath := strings.ToLower(path)
+	return slices.ContainsFunc(AllowedVideoTypes, func(ext string) bool {
+		return strings.HasSuffix(lowerPath, ext)
+	})
+}
+
 // AllowedAudioTypes defines the permitted audio file types.
 var AllowedAudioTypes = []string{".mp3", ".wav", ".m4a", ".aac", ".ogg", ".flac"}
 

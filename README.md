@@ -60,6 +60,10 @@ event and nothing rewrites an older message just to make it shorter.
 - **Tool output is capped at source**, with the dropped middle spilled to a file
   whose path stays in the result. Repeated lines are folded with a count while
   distinct lines stay verbatim.
+- **Images and videos can be pasted or picked.** The text input accepts image
+  and video paths, the file picker offers both, and custom-provider models are
+  scanned for multimodal capability so their IDs enable image/video input
+  automatically.
 - **Skills load on demand.** A bounded index of 16 described skills plus the
   `fetch_skill` tool; the loader was previously built but never allowlisted.
 - **Swarms** fan out independent lookups on the small model, with one shared

@@ -653,6 +653,12 @@ func (c *Config) configureProviders(ctx context.Context, store *ConfigStore, env
 		if models, ok := discovered[id]; ok {
 			providerConfig.Models = mergeModels(providerConfig.Models, models)
 		}
+		// Custom providers have no curated capability table. Infer multimodal
+		// support from the model IDs so image and video attachments work when
+		// the user adds a vision model through crush.json.
+		for i := range providerConfig.Models {
+			detectMediaCapabilities(&providerConfig.Models[i])
+		}
 
 		if len(providerConfig.Models) == 0 {
 			slog.Warn("Skipping custom provider because the provider has no models", "provider", id)
@@ -1187,6 +1193,16 @@ func loadFromBytes(configs [][]byte) (*Config, error) {
 	var config Config
 	if err := json.Unmarshal(data, &config); err != nil {
 		return nil, err
+	}
+	// Custom-provider models arrive here with no curated capability table.
+	// Detect multimodal input before the config reaches the UI so a model
+	// added through crush.json can accept images and videos on first use.
+	if config.Providers != nil {
+		for _, provider := range config.Providers.Seq2() {
+			for i := range provider.Models {
+				detectMediaCapabilities(&provider.Models[i])
+			}
+		}
 	}
 	return &config, nil
 }

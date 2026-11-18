@@ -987,3 +987,26 @@ func TestStatusModeBadge(t *testing.T) {
 		require.Contains(t, ansi.Strip(s.modeBadge()), tc.badge, tc.name)
 	}
 }
+
+func TestCurrentModelSupportsVideos(t *testing.T) {
+	t.Parallel()
+
+	providers := csync.NewMap[string, config.ProviderConfig]()
+	providers.Set("test-provider", config.ProviderConfig{
+		ID: "test-provider",
+		Models: []catwalk.Model{
+			{ID: "test-model", Capabilities: catwalk.Capabilities{Vision: true}},
+		},
+	})
+	cfg := &config.Config{
+		Models: map[config.SelectedModelType]config.SelectedModel{
+			config.SelectedModelTypeLarge: {Provider: "test-provider", Model: "test-model"},
+		},
+		Providers: providers,
+		Agents: map[string]config.Agent{
+			config.AgentCoder: {Model: config.SelectedModelTypeLarge},
+		},
+	}
+	ui := newTestUIWithConfig(t, cfg)
+	require.True(t, ui.currentModelSupportsVideos())
+}

@@ -97,7 +97,7 @@ func NewFilePicker(com *common.Common) (*FilePicker, tea.Cmd) {
 	)
 
 	fp := filepicker.New()
-	fp.AllowedTypes = common.AllowedImageTypes
+	fp.AllowedTypes = append(append([]string{}, common.AllowedImageTypes...), common.AllowedVideoTypes...)
 	fp.ShowPermissions = false
 	fp.ShowSize = false
 	fp.AutoHeight = false
