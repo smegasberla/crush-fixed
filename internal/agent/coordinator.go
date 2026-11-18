@@ -1006,6 +1006,7 @@ func (c *coordinator) buildAgentWithModels(ctx context.Context, ready *errgroup.
 		Messages:             c.messages,
 		Permissions:          c.permissions,
 		Cfg:                  c.cfg,
+		VisionModel:          c.visionModelFunc(large.ModelCfg),
 		Tools:                nil,
 		Notify:               c.notify,
 		RunComplete:          c.runComplete,

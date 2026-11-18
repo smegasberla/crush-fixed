@@ -244,6 +244,7 @@ type activeCancel struct {
 
 type sessionAgent struct {
 	models             func() ModelSet
+	visionModel        VisionModelFunc
 	systemPromptPrefix *csync.Value[string]
 	systemPrompt       *csync.Value[string]
 	tools              *csync.Slice[fantasy.AgentTool]
@@ -391,6 +392,9 @@ type SessionAgentOptions struct {
 	Speed *SpeedOptions
 	// Leverage carries the long-session settings. Nil disables the layer.
 	Leverage *LeverageOptions
+	// VisionModel supplies a vision-capable model used to describe media for
+	// a model that cannot read it. Nil means media cannot be described.
+	VisionModel VisionModelFunc
 }
 
 func NewSessionAgent(
@@ -398,6 +402,7 @@ func NewSessionAgent(
 ) SessionAgent {
 	return &sessionAgent{
 		models:               opts.Models,
+		visionModel:          opts.VisionModel,
 		systemPromptPrefix:   csync.NewValue(opts.SystemPromptPrefix),
 		systemPrompt:         csync.NewValue(opts.SystemPrompt),
 		isSubAgent:           opts.IsSubAgent,
@@ -1024,7 +1029,15 @@ func (a *sessionAgent) Run(ctx context.Context, call SessionAgentCall) (result *
 	// Project memory is retrieved before the turn so a lesson learned earlier
 	// can change what this turn does, not just what it says afterwards.
 	memoryBlock := a.leverage.memoryBlock(ctx, call.Prompt)
-	modelContext := hostContextPrompt(call.HostContext) + notesPrompt(a.takeNotes(call.SessionID)) + memoryBlock
+	// A model without vision never receives the attachment bytes, so the
+	// media is transcribed by a vision-capable model and the description
+	// rides along as text. Without this the model is right to say it cannot
+	// see the image the user just pasted.
+	mediaBlock := ""
+	if !largeModel.CatwalkCfg.Capabilities.Vision {
+		mediaBlock = a.describeMedia(ctx, call.Attachments)
+	}
+	modelContext := hostContextPrompt(call.HostContext) + notesPrompt(a.takeNotes(call.SessionID)) + memoryBlock + mediaBlock
 	if firstTurn {
 		modelContext += a.gitStatusContext(ctx)
 	}
